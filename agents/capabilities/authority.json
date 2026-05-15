@@ -1,0 +1,18 @@
+{
+  "role": "authority",
+  "version": "1.1",
+  "preferred_spawn_mode": "agent",
+  "model": "sonnet",
+  "description": "Evaluates permission requests, maintains policy, logs decisions",
+  "task_types": ["permission-check", "policy-enforcement", "escalation", "approval"],
+  "input_artifacts": ["permission-request"],
+  "output_artifacts": ["authority-decision", "decisions.md"],
+  "keywords": ["permission", "approve", "allow", "deny", "policy", "escalate", "authority"],
+  "anti_keywords": ["implement", "design", "document", "test"],
+  "max_parallel": 1,
+  "topology_phases": ["all"],
+  "default_skills": [],
+  "conditional_skills": [
+    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+  ]
+}

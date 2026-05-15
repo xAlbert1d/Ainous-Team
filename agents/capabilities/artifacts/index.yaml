@@ -1,0 +1,22 @@
+artifacts:
+  architect-design:
+    manifest: agents/capabilities/artifacts/architect-design.yaml
+    accepted_versions: [1]
+  researcher-findings:
+    manifest: agents/capabilities/artifacts/researcher-findings.yaml
+    accepted_versions: [1]
+  security-findings:
+    manifest: agents/capabilities/artifacts/security-findings.yaml
+    accepted_versions: [1]
+  code-quality-findings:
+    manifest: agents/capabilities/artifacts/code-quality-findings.yaml
+    accepted_versions: [1]
+  tester-plan:
+    manifest: agents/capabilities/artifacts/tester-plan.yaml
+    accepted_versions: [1]
+  tester-results:
+    manifest: agents/capabilities/artifacts/tester-results.yaml
+    accepted_versions: [1]
+  signal-findings:
+    manifest: agents/capabilities/artifacts/signal-findings.yaml
+    accepted_versions: [1]

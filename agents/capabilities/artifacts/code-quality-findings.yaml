@@ -1,0 +1,8 @@
+name: code-quality-findings
+version: 1
+producer: code-quality
+consumer: developer
+informed_roles: [architect, coordinator]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/code-quality-findings*.md"
+required_sections: []
+required_frontmatter: []

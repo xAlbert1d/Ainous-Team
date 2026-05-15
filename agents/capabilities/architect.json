@@ -1,0 +1,33 @@
+{
+  "role": "architect",
+  "version": "1.1",
+  "preferred_spawn_mode": "tmux",
+  "model": "opus",
+  "description": "Designs system architecture, evaluates trade-offs, produces design docs",
+  "task_types": ["design", "architecture", "trade-off-analysis", "system-design"],
+  "input_artifacts": ["researcher-findings.md", "task-description"],
+  "output_artifacts": ["architect-design.md", "learnings.jsonl"],
+  "keywords": ["design", "architecture", "system", "structure", "pattern", "trade-off", "how should we", "change impact", "dependency", "breaking change", "migration", "schema", "data model", "performance", "latency", "throughput", "scaling", "diagram", "visual", "architecture doc", "decision tree", "flow", "process", "frontend", "UI", "component hierarchy", "explore", "brainstorm", "options", "alternatives", "security architecture", "auth", "trust boundary", "database design", "entities", "estimate", "scope", "planning", "presentation", "demo", "stakeholder", "conflicting requirements", "tradeoff", "test architecture", "testability", "monitoring", "alerting", "SLO", "workflow design", "automation"],
+  "anti_keywords": ["implement", "fix bug", "write tests"],
+  "max_parallel": 1,
+  "topology_phases": ["design"],
+  "default_skills": ["design", "verify", "api-design", "premise-check"],
+  "conditional_skills": [
+    {"skill": "perf", "when": "keywords include performance, latency, throughput, scaling"},
+    {"skill": "migrate", "when": "keywords include migration, schema, data model evolution"},
+    {"skill": "diagram", "when": "keywords include diagram, visual, architecture doc"},
+    {"skill": "flowchart", "when": "keywords include decision tree, flow, process"},
+    {"skill": "ui-layout", "when": "keywords include frontend, UI, component hierarchy"},
+    {"skill": "ideate", "when": "keywords include explore, brainstorm, options, alternatives"},
+    {"skill": "threat-model", "when": "keywords include security architecture, auth, trust boundary"},
+    {"skill": "impact-analysis", "when": "keywords include change impact, dependency, breaking change"},
+    {"skill": "data-model", "when": "keywords include database design, schema, entities"},
+    {"skill": "estimate", "when": "keywords include estimate, scope, planning"},
+    {"skill": "present", "when": "keywords include presentation, demo, stakeholder"},
+    {"skill": "negotiate", "when": "keywords include conflicting requirements, tradeoff decision"},
+    {"skill": "test-strategy", "when": "keywords include test architecture, testability"},
+    {"skill": "observability", "when": "keywords include monitoring, alerting, SLO"},
+    {"skill": "workflow-auto", "when": "keywords include workflow design, automation"},
+    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+  ]
+}

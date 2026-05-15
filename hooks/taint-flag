@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# taint-flag — PostToolUse hook for ainous-team plugin
+# Records a taint-flag entry for each WebFetch|WebSearch tool call.
+# Mirror of hooks/skill-telemetry envelope pattern.
+#
+# FAIL-CLOSED on missing nonce or empty CLAUDE_SESSION_ID: writes no flag,
+# logs error to ~/.claude/.taint-flag-errors.log, exits 0 (PostToolUse must
+# not break the fetching tool call — but the next PreToolUse Write that
+# requires taint data will fail closed per authority-enforce.sh §2.5).
+#
+# Flag file: .claude/ainous-roles/team-sync/state/taint-flags/<hashed_sid>.jsonl
+# hashed_sid = sha256(CLAUDE_SESSION_ID || nonce_bytes)
+#
+# PostToolUse payload (stdin, JSON):
+#   tool_name     — "WebFetch" | "WebSearch"
+#   tool_input    — object with url (WebFetch) or query (WebSearch)
+#   tool_result   — object with content (used for content_hash if available)
+#   session_id    — Claude session ID
+
+set -uo pipefail
+# NOTE: no -e — we handle errors in the subshell; outer script exits 0 always
+
+_ERROR_LOG="${HOME}/.claude/.taint-flag-errors.log"
+
+(
+    INPUT=$(cat 2>/dev/null || true)
+    if [ -z "$INPUT" ]; then
+        printf '[%s] taint-flag: empty stdin — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    # Determine project root
+    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    TAINT_FLAGS_DIR="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/taint-flags"
+
+    # Read role from per-pane marker, fallback to shared marker, fallback to "unknown"
+    ROLE="unknown"
+    if [ -n "${TMUX_PANE:-}" ] && [ -f "${HOME}/.claude/.session-role-${TMUX_PANE}" ]; then
+        ROLE=$(cat "${HOME}/.claude/.session-role-${TMUX_PANE}" 2>/dev/null || echo "unknown")
+    elif [ -f "${HOME}/.claude/.session-role" ]; then
+        ROLE=$(cat "${HOME}/.claude/.session-role" 2>/dev/null || echo "unknown")
+    fi
+    ROLE=$(printf '%s' "$ROLE" | tr -d '[:space:]')
+    [ -z "$ROLE" ] && ROLE="unknown"
+
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] taint-flag: python3 not found — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    python3 - "$INPUT" "$ROLE" "$TAINT_FLAGS_DIR" << 'PYEOF'
+import sys, json, os, hashlib
+from datetime import datetime, timezone
+
+raw_input    = sys.argv[1]
+role         = sys.argv[2]
+flags_dir    = sys.argv[3]
+
+error_log = os.path.expanduser("~/.claude/.taint-flag-errors.log")
+nonce_dir = os.path.expanduser("~/.claude/.taint-nonces")
+
+def _log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(error_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{ts}] taint-flag: {msg}\n")
+    except OSError:
+        pass
+
+# Parse payload early — session_id is extracted from stdin JSON
+try:
+    payload = json.loads(raw_input)
+except (json.JSONDecodeError, ValueError) as exc:
+    _log(f"malformed stdin JSON: {exc} — skipping")
+    sys.exit(0)
+
+session_id = payload.get("session_id", "")
+
+# Fail-closed: session_id must be present
+if not session_id:
+    _log("session_id is empty — fail-closed, no flag written")
+    sys.exit(0)
+
+# Resolve nonce file path (sha256 of session_id used as the filename for the nonce itself)
+hashed_sid_for_nonce = hashlib.sha256(session_id.encode()).hexdigest()
+nonce_file = os.path.join(nonce_dir, f"{hashed_sid_for_nonce}.nonce")
+
+# Fail-closed: nonce must be readable
+try:
+    with open(nonce_file, "rb") as _nf:
+        nonce_bytes = _nf.read()
+    if not nonce_bytes:
+        _log(f"nonce file is empty at {nonce_file} — fail-closed, no flag written")
+        sys.exit(0)
+except (FileNotFoundError, PermissionError, OSError) as exc:
+    _log(f"cannot read nonce file {nonce_file}: {exc} — fail-closed, no flag written")
+    sys.exit(0)
+
+# Compute hashed filename: sha256(session_id || nonce_bytes)
+combined = session_id.encode() + nonce_bytes
+hashed_filename = hashlib.sha256(combined).hexdigest()
+
+tool_name  = payload.get("tool_name", "")
+tool_input = payload.get("tool_input", {}) or {}
+tool_result = payload.get("tool_result", {}) or {}
+if not isinstance(tool_input, dict):
+    tool_input = {}
+if not isinstance(tool_result, dict):
+    tool_result = {}
+
+# Extract URL
+if tool_name == "WebFetch":
+    url = str(tool_input.get("url", ""))
+elif tool_name == "WebSearch":
+    url = f"search:{tool_input.get('query', '')}"
+else:
+    # Not a WebFetch/WebSearch — nothing to record
+    sys.exit(0)
+
+# Compute content_hash (forensics-only — not an integrity claim)
+# Prefer tool_result content if available; fall back to sha256(url)
+result_content = tool_result.get("content", None)
+if result_content is not None:
+    content_hash = hashlib.sha256(str(result_content).encode()).hexdigest()
+else:
+    content_hash = hashlib.sha256(url.encode()).hexdigest()
+
+now = datetime.now(timezone.utc)
+ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+record = {
+    "ts":           ts,
+    "tool":         tool_name,
+    "url":          url,
+    "content_hash": content_hash,
+    "role":         role,
+    "schema":       "1",
+}
+
+# Write flag record — set env marker so append-only predicate allows it
+os.makedirs(flags_dir, exist_ok=True)
+flag_path = os.path.join(flags_dir, f"{hashed_filename}.jsonl")
+
+# TAINT_FLAG_HOOK=1 must be set before the write (allows bypass of role-write block)
+os.environ["TAINT_FLAG_HOOK"] = "1"
+try:
+    with open(flag_path, "a", encoding="utf-8") as _ff:
+        _ff.write(json.dumps(record) + "\n")
+    _log(f"wrote taint flag: tool={tool_name} url={url[:80]} role={role} file={flag_path}")
+except OSError as exc:
+    _log(f"failed to write flag to {flag_path}: {exc}")
+
+sys.exit(0)
+PYEOF
+
+) 2>>"$_ERROR_LOG" || true
+
+exit 0

@@ -1,0 +1,13 @@
+name: tester-plan
+version: 1
+producer: tester
+consumer: developer
+informed_roles: [coordinator]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/tester-plan*.md"
+required_sections: []
+required_frontmatter:
+  - role
+  - session
+  - source
+  - discovered
+  - verified

@@ -1,0 +1,8 @@
+{
+  "event_type": "retried",
+  "required": ["timestamp", "event", "role", "phase"],
+  "optional": ["schema", "session_id", "attempt", "issues", "action"],
+  "enums": {
+    "event": ["retried"]
+  }
+}

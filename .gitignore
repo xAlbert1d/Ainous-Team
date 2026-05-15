@@ -1,0 +1,36 @@
+# User data (generated per-installation, not plugin code)
+*.session-role
+.claude/ainous-roles/consolidator/promotion-review.jsonl
+.claude/ainous-roles/consolidator/promotion-approvals.md
+.claude/
+
+# Secrets and credentials
+.env*
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+*.cert
+*.crt
+.htpasswd
+credentials.*
+secrets.*
+*token.json
+
+# OS files
+.DS_Store
+
+# Auto-generated coordinator identity (ainous-team plugin)
+.claude/CLAUDE.md
+
+# Flutter/Dart build artifacts
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock

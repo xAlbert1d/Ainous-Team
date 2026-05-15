@@ -1,0 +1,8 @@
+{
+  "event_type": "HALT",
+  "required": ["timestamp", "event", "role", "phase", "reason", "evidence"],
+  "optional": ["schema", "session_id"],
+  "enums": {
+    "event": ["HALT"]
+  }
+}

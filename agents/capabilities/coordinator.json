@@ -1,0 +1,24 @@
+{
+  "role": "coordinator",
+  "version": "1.1",
+  "preferred_spawn_mode": "auto",
+  "model": "opus",
+  "description": "Orchestrates team, routes tasks, synthesizes results — never implements directly",
+  "task_types": ["orchestration", "planning", "synthesis", "routing"],
+  "input_artifacts": ["task-description"],
+  "output_artifacts": ["routing-decision", "synthesis-report"],
+  "keywords": ["plan", "coordinate", "orchestrate", "synthesize", "team", "retrospective", "team review", "retro", "incident", "post-mortem", "root cause", "backlog", "prioritize", "triage", "strategic review", "assumption check", "conflicting requirements", "stakeholder alignment", "scoping", "sprint", "planning"],
+  "anti_keywords": ["implement", "code", "write tests", "document"],
+  "max_parallel": 1,
+  "topology_phases": ["all"],
+  "default_skills": [],
+  "conditional_skills": [
+    {"skill": "retro-metrics", "when": "keywords include retrospective, team review, retro"},
+    {"skill": "auto-decide", "when": "task involves many dependent decisions with clear criteria"},
+    {"skill": "post-mortem", "when": "keywords include incident, post-mortem, root cause"},
+    {"skill": "prioritize", "when": "keywords include backlog, prioritize, triage"},
+    {"skill": "premise-check", "when": "keywords include strategic review, assumption check"},
+    {"skill": "negotiate", "when": "keywords include conflicting requirements, stakeholder alignment"},
+    {"skill": "estimate", "when": "keywords include planning, scoping, sprint"}
+  ]
+}

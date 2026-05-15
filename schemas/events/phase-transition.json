@@ -1,0 +1,9 @@
+{
+  "event_type": "phase-transition",
+  "required": ["timestamp", "event", "from_phase", "to_phase", "gate_status"],
+  "optional": ["schema", "session_id", "artifacts_verified"],
+  "enums": {
+    "event": ["phase-transition"],
+    "gate_status": ["passed", "failed"]
+  }
+}

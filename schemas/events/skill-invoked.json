@@ -1,0 +1,9 @@
+{
+  "event_type": "skill-invoked",
+  "required": ["timestamp", "event", "role", "skill", "session", "source"],
+  "optional": ["schema", "session_id", "tool"],
+  "enums": {
+    "event": ["skill-invoked"],
+    "source": ["coordinator-spawn", "role-self-report", "hook-auto"]
+  }
+}

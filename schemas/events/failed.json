@@ -1,0 +1,8 @@
+{
+  "event_type": "failed",
+  "required": ["timestamp", "event", "role", "phase"],
+  "optional": ["schema", "session_id", "failure_mode", "detail", "artifacts", "contract_status", "action"],
+  "enums": {
+    "event": ["failed"]
+  }
+}

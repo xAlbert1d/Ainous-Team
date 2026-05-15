@@ -1,0 +1,24 @@
+{
+  "role": "ROLE_NAME",
+  "metric": "METRIC_NAME",
+  "sessions": [],
+  "summary": {
+    "total_sessions": 0,
+    "avg_score": 0,
+    "trend": "neutral",
+    "best_strategies": []
+  },
+  "trust": {
+    "level": "junior",
+    "score": 50,
+    "history": {
+      "approvals_granted": 0,
+      "denials_received": 0,
+      "violations_detected": 0,
+      "sessions_completed": 0,
+      "user_overrides": 0
+    },
+    "last_promotion": null,
+    "last_demotion": null
+  }
+}

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# SessionEnd hook for ainous-team plugin
+# 1. Cleans up the per-session anchor file written by session-start.
+# 2. Aggregates hook-auto skill-invoked events into growth.json sessions[].skills_invoked.
+# Both steps are fail-open — telemetry must never block or error out session-end.
+
+set -uo pipefail
+
+if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    rm -f "$HOME/.claude/.session-anchor-${CLAUDE_SESSION_ID}"
+fi
+
+# ---------------------------------------------------------------------------
+# Skill aggregation: read task-history.jsonl, find skill-invoked events for
+# this session (matched by session_id field — schema v4.14.0 addition), and
+# append unique skill names to the latest growth.json sessions[] entry per role.
+# Fail-open: any error is logged to the debug log and processing continues.
+# ---------------------------------------------------------------------------
+(
+    _DEBUG_LOG="${HOME}/.claude/ainous-team-telemetry.log"
+    _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+
+    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    TASK_HISTORY="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/task-history.jsonl"
+    GROWTH_DIR="${HOME}/.claude/ainous-roles"
+    SESSION_ID="${CLAUDE_SESSION_ID:-}"
+
+    if [ ! -f "$TASK_HISTORY" ]; then
+        printf '[%s] session-end aggregation: task-history.jsonl not found — skipping\n' \
+            "$_TS" >> "$_DEBUG_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] session-end aggregation: python3 not found — skipping\n' \
+            "$_TS" >> "$_DEBUG_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    python3 - "$TASK_HISTORY" "$GROWTH_DIR" "$SESSION_ID" << 'PYEOF'
+import sys, json, os
+from datetime import datetime, timezone
+
+hist_path   = sys.argv[1]
+growth_dir  = sys.argv[2]
+session_id  = sys.argv[3] if len(sys.argv) > 3 else ""
+debug_log   = os.path.expanduser("~/.claude/ainous-team-telemetry.log")
+today       = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+def _log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(debug_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{ts}] session-end aggregation: {msg}\n")
+    except OSError:
+        pass
+
+# Read events
+try:
+    with open(hist_path, encoding="utf-8") as f:
+        lines = f.readlines()
+except OSError as exc:
+    _log(f"cannot read task-history.jsonl: {exc}")
+    sys.exit(0)
+
+# Collect skill-invoked events for this session
+# Match by session_id field (v4.14.0); fall back to matching today's date if no session_id
+skills_by_role: dict[str, set[str]] = {}
+matched = 0
+for line in lines:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        continue
+    if ev.get("event") != "skill-invoked":
+        continue
+    if ev.get("source") != "hook-auto":
+        continue  # Only aggregate mechanically observed events here
+    ev_role = ev.get("role", "unknown")
+    ev_skill = ev.get("skill", "")
+    if not ev_skill:
+        continue
+    # Session matching: prefer session_id field; fall back to date
+    ev_session_id = ev.get("session_id", "")
+    ev_session_date = ev.get("session", "")
+    if session_id:
+        if ev_session_id != session_id:
+            continue
+    else:
+        # No session_id available — match by today's date
+        if ev_session_date != today:
+            continue
+    skills_by_role.setdefault(ev_role, set()).add(ev_skill)
+    matched += 1
+
+if not skills_by_role:
+    _log(f"no hook-auto skill-invoked events for session '{session_id or today}' — nothing to aggregate")
+    sys.exit(0)
+
+_log(f"aggregating {matched} events across {len(skills_by_role)} role(s)")
+
+# Append to growth.json sessions[].skills_invoked for each role
+for role, skills in skills_by_role.items():
+    growth_path = os.path.join(growth_dir, role, "growth.json")
+    try:
+        with open(growth_path, encoding="utf-8") as f:
+            growth = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        _log(f"cannot load growth.json for role '{role}': {exc} — skipping")
+        continue
+
+    sessions = growth.get("sessions", [])
+    if not sessions:
+        _log(f"role '{role}' has no sessions[] in growth.json — skipping (consolidator will read task-history.jsonl)")
+        continue
+
+    # Find latest session entry; prefer one matching today
+    latest = None
+    for entry in reversed(sessions):
+        if isinstance(entry, dict):
+            latest = entry
+            break
+    if latest is None:
+        _log(f"role '{role}': no dict entry in sessions[] — skipping")
+        continue
+
+    # Merge skills (preserve any existing self-reported skills)
+    existing = set(latest.get("skills_invoked", []) or [])
+    merged = sorted(existing | skills)
+    latest["skills_invoked"] = merged
+
+    try:
+        with open(growth_path, "w", encoding="utf-8") as f:
+            json.dump(growth, f, indent=2)
+            f.write("\n")
+        _log(f"role '{role}': wrote skills_invoked={merged}")
+    except OSError as exc:
+        _log(f"cannot write growth.json for role '{role}': {exc}")
+
+sys.exit(0)
+PYEOF
+
+) 2>>"${HOME}/.claude/ainous-team-telemetry.log" || true
+
+exit 0

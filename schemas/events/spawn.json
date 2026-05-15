@@ -1,0 +1,9 @@
+{
+  "event_type": "spawn",
+  "required": ["timestamp", "event", "role", "phase", "detail", "mode"],
+  "optional": ["schema", "session_id", "task_id"],
+  "enums": {
+    "event": ["spawn"],
+    "mode": ["agent", "tmux"]
+  }
+}

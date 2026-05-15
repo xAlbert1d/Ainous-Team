@@ -1,0 +1,8 @@
+name: signal-findings
+version: 1
+producer: signal
+consumer: coordinator
+informed_roles: []
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/signal-findings*.md"
+required_sections: []
+required_frontmatter: []

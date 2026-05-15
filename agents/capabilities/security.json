@@ -1,0 +1,18 @@
+{
+  "role": "security",
+  "version": "1.1",
+  "preferred_spawn_mode": "agent",
+  "model": "opus",
+  "description": "Scans for vulnerabilities, threat models, reviews auth and data handling",
+  "task_types": ["security-review", "threat-modeling", "vulnerability-scan", "auth-review", "compliance"],
+  "input_artifacts": ["implementation", "architect-design.md"],
+  "output_artifacts": ["security-findings.md", "learnings.jsonl"],
+  "keywords": ["security", "vulnerability", "auth", "permission", "credential", "threat", "exploit", "injection", "XSS", "CSRF", "STRIDE", "threat model", "compliance", "audit", "regulatory", "GDPR", "HIPAA", "PCI", "pentest", "attack surface", "zero trust", "hardening"],
+  "anti_keywords": ["implement feature", "write docs"],
+  "max_parallel": 1,
+  "topology_phases": ["review", "implement"],
+  "default_skills": ["security-scan", "verify", "threat-model", "compliance-check"],
+  "conditional_skills": [
+    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+  ]
+}

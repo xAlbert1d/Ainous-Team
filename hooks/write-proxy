@@ -1,0 +1,681 @@
+#!/usr/bin/env bash
+# write-proxy — PostToolUse hook for ainous-team plugin (v5.5.0)
+# Hook-driven write-delegation: intercepts SendMessage envelopes from teammates
+# and performs the intended Write directly via Python open() — bypassing the
+# team-lead permission UI crash (charter §15).
+#
+# FAIL-CLOSED on any validation failure: no write, error logged.
+# Always exits 0 (PostToolUse must not break the parent SendMessage call).
+#
+# Conditions enforced:
+#   C-1: Path containment — destination inside project root + spawn scope + _is_overly_broad()
+#   C-2: Cryptographic discriminator — HMAC of envelope body keyed by per-spawn nonce
+#   C-3: hook-write audit event emitted to task-history.jsonl on every successful write
+#
+# Error log: ~/.claude/.write-proxy-errors.log
+
+set -uo pipefail
+# NOTE: no -e — all logic runs in subshell; outer script exits 0 always
+
+_ERROR_LOG="${HOME}/.claude/.write-proxy-errors.log"
+
+(
+    INPUT=$(cat 2>/dev/null || true)
+    if [ -z "$INPUT" ]; then
+        printf '[%s] write-proxy: empty stdin — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    # Determine project root
+    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    TASK_HISTORY="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/task-history.jsonl"
+
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] write-proxy: python3 not found — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    # v5.7.0 (Item 3): pass envelope via tempfile to avoid argv size ceiling truncation.
+    # Pattern mirrors authority-enforce.sh C4 fix (lines 52-60).
+    _WP_TMPFILE=$(python3 -c "
+import tempfile, os, sys
+old_umask = os.umask(0o177)
+try:
+    fd, path = tempfile.mkstemp(prefix='wp-input.', dir='/tmp')
+    os.write(fd, sys.stdin.buffer.read())
+    os.close(fd)
+    print(path)
+finally:
+    os.umask(old_umask)
+" <<< "$INPUT" 2>/dev/null) || true
+    if [ -z "$_WP_TMPFILE" ] || [ ! -f "$_WP_TMPFILE" ]; then
+        printf '[%s] write-proxy: failed to create tempfile — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+    trap 'rm -f "$_WP_TMPFILE"' EXIT
+
+    python3 - "$_WP_TMPFILE" "$PROJECT_ROOT" "$TASK_HISTORY" << 'PYEOF'
+import sys, json, os, re, hmac, hashlib, fnmatch, secrets
+from datetime import datetime, timezone
+
+# v5.7.0: argv[1] is now a tempfile path (not raw content) — read and delete.
+_input_path  = sys.argv[1]
+with open(_input_path, encoding='utf-8') as _ipf:
+    raw_input = _ipf.read()
+project_root = sys.argv[2]
+hist_path    = sys.argv[3]
+
+error_log = os.path.expanduser("~/.claude/.write-proxy-errors.log")
+
+MAGIC_MARKER = "<!-- WRITE-PROXY-ENVELOPE v1 -->"
+
+# ---------------------------------------------------------------------------
+# Import shared HMAC helpers — single source of truth for the protocol.
+# Fallback to inline definitions if CLAUDE_PLUGIN_ROOT is missing (defensive).
+# ---------------------------------------------------------------------------
+_hmac_common_loaded = False
+_plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+if _plugin_root:
+    sys.path.insert(0, os.path.join(_plugin_root, "hooks"))
+    try:
+        from _hmac_common import envelope_body_for_hmac as _envelope_body_for_hmac, \
+                                  compute_envelope_hmac as _compute_hmac_fn
+        _hmac_common_loaded = True
+    except ImportError:
+        pass
+
+if not _hmac_common_loaded:
+    # Fallback inline definitions — kept in sync with _hmac_common.py verbatim.
+    # v5.7.0: hmac: line stripped only within frontmatter (Item 6 fix).
+    def _envelope_body_for_hmac(message):
+        body = message[len(MAGIC_MARKER):].lstrip('\n')
+        lines = body.splitlines(keepends=True)
+        filtered = []
+        in_frontmatter = False
+        frontmatter_closed = False
+        for i, line in enumerate(lines):
+            stripped = line.rstrip('\n').rstrip('\r')
+            if i == 0 and stripped == '---':
+                in_frontmatter = True
+                filtered.append(line)
+                continue
+            if in_frontmatter and not frontmatter_closed:
+                if stripped == '---':
+                    frontmatter_closed = True
+                    filtered.append(line)
+                elif re.match(r'^hmac:\s*', line):
+                    pass  # Strip hmac: line only within frontmatter
+                else:
+                    filtered.append(line)
+            else:
+                filtered.append(line)
+        return ''.join(filtered)
+
+    def _compute_hmac_fn(body, nonce_hex):
+        key = bytes.fromhex(nonce_hex)
+        return hmac.new(key, body.encode('utf-8'), hashlib.sha256).hexdigest()
+
+# ---------------------------------------------------------------------------
+# Import shared provenance helpers — single source of truth (v5.7.2 B-1 fix).
+# Fallback to inline definitions if CLAUDE_PLUGIN_ROOT is missing (defensive).
+# Same import-with-fallback pattern as _hmac_common.py (v5.6.4).
+# ---------------------------------------------------------------------------
+_provenance_common_loaded = False
+if _plugin_root:
+    try:
+        from _provenance_common import (
+            _PROVENANCE_PATTERNS,
+            _REQUIRED_FIELDS,
+            _VALID_SOURCE_TYPES,
+            _is_provenance_surface,
+            _extract_md_provenance,
+            _extract_jsonl_provenance,
+            _validate_provenance_block,
+        )
+        _provenance_common_loaded = True
+    except ImportError:
+        pass
+
+if not _provenance_common_loaded:
+    # Fallback inline definitions — kept in sync with _provenance_common.py verbatim.
+    _PROVENANCE_PATTERNS = [
+        (r'\.claude/ainous-roles/[^/]+/playbook\.md$',    'md'),
+        (r'\.claude/ainous-roles/team-knowledge\.md$',    'md'),
+        (r'\.claude/ainous-roles/[^/]+/learnings\.jsonl$','jsonl'),
+        (r'\.claude/ainous-roles/[^/]+/journal\.md$',     'md'),
+        (r'\.claude/ainous-roles/user-corrections\.md$',  'md'),
+        (r'\.claude/ainous-roles/team-sync/artifacts/'
+         r'(?:architect-design|researcher-findings|security-findings|code-quality-findings'
+         r'|tester-plan|tester-results|signal-findings)[^/]*\.md$', 'md'),
+        (r'\.claude/ainous-roles/team-sync/state/taint-flags/[^/]+\.jsonl$', 'jsonl'),
+    ]
+
+    _REQUIRED_FIELDS = frozenset({'role', 'session', 'source', 'discovered', 'verified'})
+
+    _VALID_SOURCE_TYPES = {
+        'observed', 'self-described', 'inferred',
+        'legacy-unverified', 'coordinator-spawn', 'role-self-report',
+    }
+
+    def _is_provenance_surface(resolved_path):
+        for pattern, surface_type in _PROVENANCE_PATTERNS:
+            if re.search(pattern, resolved_path):
+                return surface_type
+        return None
+
+    def _extract_md_provenance(content):
+        m = re.match(r'^---\n(.*?)\n---(?:\n|$)', content, re.DOTALL)
+        if not m:
+            return None
+        fm_text = m.group(1)
+        result = {}
+        for line in fm_text.splitlines():
+            kv = re.match(r'^([\w_-]+):\s*(.*)', line)
+            if kv:
+                result[kv.group(1).strip()] = kv.group(2).strip()
+        return result if result else None
+
+    def _extract_jsonl_provenance(content):
+        """Extract provenance from first non-empty JSONL line. Returns dict or None."""
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    return obj
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return None
+
+    def _validate_provenance_block(prov):
+        """Check all 5 required fields are present and source is valid. Returns (ok, reason)."""
+        if not isinstance(prov, dict):
+            return False, "provenance block is not a dict"
+        missing = _REQUIRED_FIELDS - set(prov.keys())
+        if missing:
+            return False, f"missing provenance fields: {sorted(missing)}"
+        source = prov.get('source', '')
+        if source not in _VALID_SOURCE_TYPES:
+            return False, f"invalid source type: {source!r}"
+        return True, ""
+
+def _log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(error_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{ts}] write-proxy: {msg}\n")
+    except OSError:
+        pass
+
+def _is_overly_broad(pattern):
+    """Mirror of authority-enforce.sh _is_overly_broad()."""
+    if not pattern:
+        return True
+    if pattern in ("*", "**", "**/*", "**/**", "*.*"):
+        return True
+    if len(pattern) < 4:
+        return True
+    if '/' not in pattern:
+        return True
+    if re.match(r'^\*\.\w+$', pattern):
+        return True
+    if pattern.startswith("**/"):
+        return True
+    parts = pattern.split("/")
+    meaningful = [p for p in parts if p and p not in ("*", "**")]
+    if len(meaningful) < 2:
+        return True
+    return False
+
+
+def _parse_envelope(message):
+    """Parse WRITE-PROXY-ENVELOPE from message text.
+    Returns (frontmatter_dict, content_body) or raises ValueError."""
+    # Strip magic marker
+    body = message[len(MAGIC_MARKER):].lstrip('\n')
+
+    # Parse YAML frontmatter
+    if not body.startswith('---\n'):
+        raise ValueError("envelope missing YAML frontmatter after magic marker")
+    end_fm = body.find('\n---\n', 4)
+    if end_fm != -1:
+        fm_text = body[4:end_fm]
+        content_body = body[end_fm + len('\n---\n'):]
+    else:
+        # Try end-of-string marker (e.g. '\n---' at end of string)
+        end_fm2 = body.find('\n---', 4)
+        if end_fm2 == -1:
+            raise ValueError("envelope frontmatter not closed")
+        fm_text = body[4:end_fm2]
+        content_body = body[end_fm2 + len('\n---'):].lstrip('\n')
+
+    # Parse frontmatter key: value (simple — no nested YAML)
+    fm = {}
+    current_key = None
+    current_lines = []
+
+    for line in fm_text.splitlines():
+        # Top-level key
+        kv = re.match(r'^([\w_-]+):\s*(.*)', line)
+        if kv and not line.startswith(' ') and not line.startswith('\t'):
+            if current_key:
+                fm[current_key] = '\n'.join(current_lines).strip() if current_lines else fm.get(current_key, '')
+            current_key = kv.group(1).strip()
+            val = kv.group(2).strip()
+            fm[current_key] = val
+            current_lines = []
+        elif line.startswith('  ') or line.startswith('\t'):
+            # Indented line — part of sub-block (provenance)
+            current_lines.append(line.strip())
+        else:
+            current_lines.append(line)
+
+    # Flush last key
+    if current_key and current_lines:
+        pass  # scalar value already captured on first line
+
+    # Parse provenance sub-block
+    prov_block = {}
+    in_prov = False
+    prov_lines = []
+    for line in fm_text.splitlines():
+        if re.match(r'^provenance:\s*$', line):
+            in_prov = True
+            continue
+        if in_prov:
+            if line.startswith('  ') or line.startswith('\t'):
+                prov_lines.append(line.strip())
+            else:
+                in_prov = False
+    for pl in prov_lines:
+        kv = re.match(r'^([\w_-]+):\s*(.*)', pl)
+        if kv:
+            prov_block[kv.group(1).strip()] = kv.group(2).strip()
+    if prov_block:
+        fm['provenance'] = prov_block
+
+    return fm, content_body
+
+def _find_teammate_nonce_event(task_history_path, teammate_name, team_name):
+    """Legacy helper: scan task-history backwards for most recent teammate-nonce event
+    matching (team_name, teammate_name). Returns the event dict or None."""
+    try:
+        with open(task_history_path, encoding='utf-8') as f:
+            lines = f.readlines()
+    except (FileNotFoundError, OSError):
+        return None
+    for line in reversed(lines):
+        try:
+            ev = json.loads(line.strip())
+            if ev.get('event') != 'teammate-nonce':
+                continue
+            if teammate_name and ev.get('teammate_name') == teammate_name and \
+               team_name and ev.get('team_name') == team_name:
+                return ev
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+def _find_teammate_nonce_event_by_role(task_history_path, role, current_session_id):
+    """Tier 2: scan task-history backwards for most recent teammate-nonce event matching role.
+
+    v5.7.0 (Item 2): requires BOTH:
+      - event session_id matches current_session_id (prevents cross-session nonce reuse)
+      - event ts within the last 24 hours (prevents indefinitely forgeable historical nonces)
+    Fail-closed: if no event meets both constraints, return None.
+    """
+    from datetime import timedelta
+    if not role:
+        return None
+    try:
+        with open(task_history_path, encoding='utf-8') as f:
+            lines = f.readlines()
+    except (FileNotFoundError, OSError):
+        return None
+    now_utc = datetime.now(timezone.utc)
+    for line in reversed(lines):
+        try:
+            ev = json.loads(line.strip())
+            if ev.get('event') != 'teammate-nonce':
+                continue
+            if ev.get('role') != role:
+                continue
+            # Session binding: must match current session.
+            # HIGH fix (v5.7.1): reject outright when current_session_id is empty —
+            # an empty session_id must never bypass the session constraint (the old
+            # `and` short-circuit allowed any session's nonce to be reached when
+            # current_session_id was "").
+            if not current_session_id or ev.get('session_id') != current_session_id:
+                continue
+            # Recency bound: must be within last 24 hours
+            ts_str = ev.get('ts') or ev.get('timestamp') or ''
+            if ts_str:
+                try:
+                    ev_ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                    if now_utc - ev_ts >= timedelta(hours=24):
+                        continue
+                except (ValueError, TypeError):
+                    continue  # Unparseable timestamp → reject (fail-closed)
+            else:
+                continue  # No timestamp → reject (fail-closed)
+            return ev
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+def _find_spawn_event(task_history_path, teammate_name, team_name):
+    """Find most recent spawn event matching teammate_name or team_name."""
+    try:
+        with open(task_history_path, encoding='utf-8') as f:
+            lines = f.readlines()
+    except (FileNotFoundError, OSError):
+        return None
+    for line in reversed(lines):
+        try:
+            ev = json.loads(line.strip())
+            if ev.get('event') != 'spawn':
+                continue
+            # Match by teammate_name or team_name
+            if teammate_name and ev.get('teammate_name') == teammate_name:
+                return ev
+            if team_name and ev.get('team_name') == team_name:
+                return ev
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+def _find_spawn_event_by_session_id(task_history_path, session_id):
+    """New Tier 1: scan task-history backwards for most recent team_name-mode spawn event
+    matching the given session_id. Returns the event dict or None."""
+    if not session_id:
+        return None
+    try:
+        with open(task_history_path, encoding='utf-8') as f:
+            lines = f.readlines()
+    except (FileNotFoundError, OSError):
+        return None
+    for line in reversed(lines):
+        try:
+            ev = json.loads(line.strip())
+            if ev.get('event') != 'spawn':
+                continue
+            if ev.get('spawn_mode') != 'team_name':
+                continue
+            if ev.get('session_id') == session_id:
+                return ev
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+def _compute_hmac(envelope_body, nonce_hex):
+    """Compute HMAC-SHA256 of envelope_body using nonce_hex as key.
+    Delegates to _hmac_common (shared module) or inline fallback — same formula."""
+    return _compute_hmac_fn(envelope_body, nonce_hex)
+
+# ---------------------------------------------------------------------------
+# Parse PostToolUse payload
+# ---------------------------------------------------------------------------
+try:
+    payload = json.loads(raw_input)
+except (json.JSONDecodeError, ValueError) as exc:
+    _log(f"malformed stdin JSON — skipping ({exc})")
+    sys.exit(0)
+
+session_id = payload.get("session_id", "")
+tool_name = payload.get("tool_name", "")
+if tool_name != "SendMessage":
+    sys.exit(0)
+
+tool_input = payload.get("tool_input", {}) or {}
+if not isinstance(tool_input, dict):
+    sys.exit(0)
+
+message = tool_input.get("message", "")
+if not isinstance(message, str):
+    sys.exit(0)
+
+# Step 2: Check for magic marker — if absent, this is a chat message, exit silently
+if not message.startswith(MAGIC_MARKER):
+    sys.exit(0)
+
+# From here: envelope detected — all failures are logged and exit 2 (subshell)
+_log(f"envelope detected — beginning validation")
+
+# Step 3: Parse envelope
+try:
+    fm, content_body = _parse_envelope(message)
+except ValueError as exc:
+    _log(f"envelope parse error: {exc} — rejected")
+    sys.exit(2)
+
+intended_destination = fm.get('intended_destination', '').strip()
+teammate_role        = fm.get('role', '').strip()
+teammate_session     = fm.get('session', '').strip()
+envelope_hmac        = fm.get('hmac', '').strip()
+provenance           = fm.get('provenance', {})
+
+if not intended_destination:
+    _log("envelope missing intended_destination — rejected")
+    sys.exit(2)
+
+# Determine teammate_name / team_name from tool_input
+# NOTE: For Agent-spawn payloads these fields are present; for SendMessage payloads they are absent.
+# The three-tier lookup below handles both cases.
+teammate_name = tool_input.get("teammate_name") or tool_input.get("name") or None
+team_name     = tool_input.get("team_name") or None
+
+# Step 4 (C-2): Resolve nonce via three-tier identity fallback (fail-closed: no nonce → reject)
+#
+# New tier ordering (v5.6.3) — fixes SendMessage envelope identity gap:
+#   Tier 1: session_id from PostToolUse payload → matching team_name-mode spawn event
+#   Tier 2: envelope role field → matching teammate-nonce event (role-keyed HMAC lookup)
+#   Tier 3: teammate_name / team_name from payload → teammate-nonce or spawn event (legacy Agent-spawn path)
+#
+# HMAC verification remains the authentication gate regardless of which tier resolved the nonce.
+nonce = None
+spawn_ev = None
+
+# --- Tier 1: session_id → most recent team_name-mode spawn event → nonce file ---
+# v5.7.0: raw nonce is no longer in task-history (write_proxy_nonce field removed).
+# Nonce file at ~/.claude/teams/<team>/nonces/<mate>.nonce (mode 0600) is canonical source.
+if not nonce and session_id:
+    t1_spawn = _find_spawn_event_by_session_id(hist_path, session_id)
+    if t1_spawn is not None:
+        spawn_ev = t1_spawn
+        # Backfill teammate_name / team_name from the spawn event for downstream use
+        if not teammate_name:
+            teammate_name = t1_spawn.get('teammate_name')
+        if not team_name:
+            team_name = t1_spawn.get('team_name')
+        # Read nonce from file — never from task-history (auth bypass fix)
+        if team_name and teammate_name:
+            t1_nonce_file = os.path.expanduser(
+                f"~/.claude/teams/{team_name}/nonces/{teammate_name}.nonce"
+            )
+            try:
+                with open(t1_nonce_file, encoding='utf-8') as _t1nf:
+                    t1_nonce = _t1nf.read().strip() or None
+                if t1_nonce:
+                    nonce = t1_nonce
+                    _log(f"nonce resolved via Tier 1 (session_id→spawn event→nonce file) "
+                         f"for session_id={session_id!r} teammate_name={teammate_name!r}")
+            except OSError as exc:
+                _log(f"Tier 1 nonce file read failed (team={team_name} mate={teammate_name}): {exc}")
+
+# --- Tier 2: envelope role → most recent teammate-nonce event keyed by role ---
+if not nonce and teammate_role:
+    t2_ev = _find_teammate_nonce_event_by_role(hist_path, teammate_role, session_id)
+    if t2_ev is not None:
+        t2_nonce = t2_ev.get('nonce')
+        if t2_nonce:
+            nonce = t2_nonce
+            # Backfill identity fields from the teammate-nonce event if still unknown
+            if not teammate_name:
+                teammate_name = t2_ev.get('teammate_name')
+            if not team_name:
+                team_name = t2_ev.get('team_name')
+            _log(f"nonce resolved via Tier 2 (envelope role→teammate-nonce event) for role={teammate_role!r}")
+
+# --- Tier 3: existing teammate_name/team_name direct lookup (legacy Agent-spawn path) ---
+if not nonce:
+    # Tier 3a: most recent teammate-nonce event matching (team_name, teammate_name)
+    tn_ev = _find_teammate_nonce_event(hist_path, teammate_name, team_name)
+    if tn_ev is not None:
+        t3a_nonce = tn_ev.get('nonce')
+        if t3a_nonce:
+            nonce = t3a_nonce
+            _log(f"nonce resolved via Tier 3a (teammate-nonce event) for teammate_name={teammate_name!r}")
+
+if not nonce:
+    # Tier 3b: nonce file lookup via teammate_name/team_name from matching spawn event.
+    # v5.7.0: raw nonce is no longer in spawn event (write_proxy_nonce field removed).
+    # Nonce file at ~/.claude/teams/<team>/nonces/<mate>.nonce (mode 0600) is canonical.
+    t3b_spawn = _find_spawn_event(hist_path, teammate_name, team_name)
+    if t3b_spawn is not None:
+        spawn_ev = t3b_spawn
+        # Backfill identity from spawn event if still unknown
+        if not teammate_name:
+            teammate_name = t3b_spawn.get('teammate_name')
+        if not team_name:
+            team_name = t3b_spawn.get('team_name')
+    if team_name and teammate_name:
+        t3b_nonce_file = os.path.expanduser(
+            f"~/.claude/teams/{team_name}/nonces/{teammate_name}.nonce"
+        )
+        try:
+            with open(t3b_nonce_file, encoding='utf-8') as _t3bnf:
+                t3b_nonce_val = _t3bnf.read().strip() or None
+            if t3b_nonce_val:
+                nonce = t3b_nonce_val
+                _log(f"nonce resolved via Tier 3b (nonce file) for teammate_name={teammate_name!r}")
+        except OSError as exc:
+            _log(f"Tier 3b nonce file read failed (team={team_name} mate={teammate_name}): {exc}")
+    if not nonce and t3b_spawn is None:
+        _log(f"no spawn event found for teammate_name={teammate_name!r} team_name={team_name!r} — rejected (C-2)")
+        sys.exit(2)
+
+if not nonce:
+    _log(f"no nonce found via any tier for teammate_name={teammate_name!r} team_name={team_name!r} — rejected (C-2)")
+    sys.exit(2)
+
+# v5.8.0: spawn_ev scope-match block removed — Layer-2 contract-implied authorization
+# was retired. Spawn scope is no longer carried on events; path containment (C-1) is
+# the sole scope check. spawn_ev is no longer needed for scope; three-tier nonce
+# resolution above is the only consumer that was already populating it.
+
+# Compute HMAC of envelope body (excluding the hmac: line)
+try:
+    expected_hmac = _compute_hmac(_envelope_body_for_hmac(message), nonce)
+except (ValueError, TypeError) as exc:
+    _log(f"HMAC computation failed: {exc} — rejected (C-2)")
+    sys.exit(2)
+
+if not hmac.compare_digest(expected_hmac, envelope_hmac):
+    _log(f"HMAC mismatch — rejected (C-2). expected={expected_hmac[:16]}... got={envelope_hmac[:16]}...")
+    sys.exit(2)
+
+_log(f"C-2 HMAC validated OK")
+
+# Step 5 (C-1): Path containment
+try:
+    resolved_dest = os.path.realpath(os.path.expanduser(intended_destination))
+except (OSError, ValueError) as exc:
+    _log(f"cannot resolve intended_destination {intended_destination!r}: {exc} — rejected (C-1)")
+    sys.exit(2)
+
+resolved_root = os.path.realpath(project_root)
+
+if not resolved_dest.startswith(resolved_root + os.sep) and resolved_dest != resolved_root:
+    _log(f"C-1 FAIL: destination {resolved_dest!r} is outside project root {resolved_root!r} — rejected")
+    sys.exit(2)
+
+# _is_overly_broad check on the destination path itself (caller-supplied pattern guard)
+# We check that the path is a real concrete path, not a glob pattern
+if '*' in intended_destination or '?' in intended_destination or '[' in intended_destination:
+    _log(f"C-1 FAIL: intended_destination contains glob characters — rejected as overly broad")
+    sys.exit(2)
+
+_log(f"C-1 path containment validated OK: {resolved_dest!r}")
+
+# Step 6: Provenance validation
+prov_ok, prov_reason = _validate_provenance_block(provenance)
+if not prov_ok:
+    _log(f"envelope provenance block invalid: {prov_reason} — rejected")
+    sys.exit(2)
+
+# If destination is a provenance surface, content body must also carry provenance
+# v5.8.1 (Item 5): extend check to JSONL surfaces (learnings.jsonl, taint-flags).
+surface_type = _is_provenance_surface(resolved_dest)
+if surface_type == 'md':
+    body_prov = _extract_md_provenance(content_body)
+    if body_prov is None:
+        _log(f"destination {resolved_dest!r} is a provenance surface but content body has no frontmatter — rejected")
+        sys.exit(2)
+    body_ok, body_reason = _validate_provenance_block(body_prov)
+    if not body_ok:
+        _log(f"content body provenance invalid for surface {resolved_dest!r}: {body_reason} — rejected")
+        sys.exit(2)
+elif surface_type == 'jsonl':
+    # Validate each non-empty record in the JSONL body carries required provenance fields.
+    # Per-record check rather than only first-line, because learnings.jsonl may have
+    # multiple records and every record must be provenance-tagged.
+    for _lineno, _raw_line in enumerate(content_body.splitlines(), 1):
+        _raw_line = _raw_line.strip()
+        if not _raw_line:
+            continue
+        try:
+            _rec = json.loads(_raw_line)
+        except (json.JSONDecodeError, ValueError):
+            _log(f"JSONL surface {resolved_dest!r} line {_lineno} is not valid JSON — rejected")
+            sys.exit(2)
+        if not isinstance(_rec, dict):
+            _log(f"JSONL surface {resolved_dest!r} line {_lineno} is not a JSON object — rejected")
+            sys.exit(2)
+        _rec_ok, _rec_reason = _validate_provenance_block(_rec)
+        if not _rec_ok:
+            _log(f"JSONL surface {resolved_dest!r} line {_lineno} provenance invalid: {_rec_reason} — rejected")
+            sys.exit(2)
+
+_log(f"provenance validation OK")
+
+# Step 7: Write via Python open() — bypasses tool surface and upstream crash
+try:
+    os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
+    with open(resolved_dest, 'w', encoding='utf-8') as wf:
+        wf.write(content_body)
+    bytes_written = len(content_body.encode('utf-8'))
+    _log(f"wrote {bytes_written} bytes to {resolved_dest!r} for role={teammate_role!r}")
+except OSError as exc:
+    _log(f"write failed for {resolved_dest!r}: {exc} — rejected")
+    sys.exit(2)
+
+# Step 8 (C-3): Emit hook-write audit event
+now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+hook_write_event = {
+    "ts":            now,
+    "schema":        "1",
+    "event":         "hook-write",
+    "source":        "hook-auto",
+    "role":          teammate_role,
+    "teammate_name": teammate_name,
+    "team_name":     team_name,
+    "destination":   resolved_dest,
+    "bytes_written": bytes_written,
+    "envelope_hmac": envelope_hmac,
+}
+try:
+    os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+    with open(hist_path, "a", encoding="utf-8") as hf:
+        hf.write(json.dumps(hook_write_event) + "\n")
+    _log(f"emitted hook-write event: destination={resolved_dest!r} bytes={bytes_written}")
+except OSError as exc:
+    _log(f"failed to write hook-write event to {hist_path}: {exc}")
+
+sys.exit(0)
+PYEOF
+
+) 2>>"$_ERROR_LOG" || true
+
+exit 0

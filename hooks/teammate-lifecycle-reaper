@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# teammate-lifecycle-reaper — SessionEnd hook for ainous-team plugin (v5.7.0)
+# When a team-mode teammate's session ends, flip its isActive flag to false
+# in ~/.claude/teams/<team>/config.json so TeamDelete succeeds immediately
+# without waiting for SessionStart state-reaper next session.
+#
+# FAIL-OPEN: all logic runs in a subshell; exits 0 unconditionally.
+# Only modifies team configs where the stopping teammate is found as active.
+#
+# Teammate identity resolution order:
+#   1. Per-pane marker ~/.claude/.session-role-<TMUX_PANE>
+#   2. Shared marker   ~/.claude/.session-role
+#   3. CLAUDE_SESSION_ID matched against task-history.jsonl spawn events
+
+set -uo pipefail
+
+_ERROR_LOG="${HOME}/.claude/.lifecycle-reaper-errors.log"
+
+(
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] lifecycle-reaper: python3 not found — skipping\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    # Resolve teammate name from per-pane or shared session-role marker
+    TEAMMATE_NAME=""
+    if [ -n "${TMUX_PANE:-}" ] && [ -f "${HOME}/.claude/.session-role-${TMUX_PANE}" ]; then
+        TEAMMATE_NAME=$(cat "${HOME}/.claude/.session-role-${TMUX_PANE}" 2>/dev/null || true)
+    elif [ -f "${HOME}/.claude/.session-role" ]; then
+        TEAMMATE_NAME=$(cat "${HOME}/.claude/.session-role" 2>/dev/null || true)
+    fi
+    TEAMMATE_NAME=$(printf '%s' "${TEAMMATE_NAME:-}" | tr -d '[:space:]')
+
+    SESSION_ID="${CLAUDE_SESSION_ID:-}"
+    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    TASK_HISTORY="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/task-history.jsonl"
+    TEAMS_DIR="${HOME}/.claude/teams"
+
+    python3 - "$TEAMMATE_NAME" "$SESSION_ID" "$TEAMS_DIR" "$TASK_HISTORY" << 'PYEOF'
+import sys, json, os
+from datetime import datetime, timezone
+
+teammate_name_arg = sys.argv[1]   # May be a role name (e.g. "developer") or teammate display name
+session_id        = sys.argv[2]
+teams_dir         = sys.argv[3]
+hist_path         = sys.argv[4]
+
+error_log = os.path.expanduser("~/.claude/.lifecycle-reaper-errors.log")
+
+def _log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(error_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{ts}] lifecycle-reaper: {msg}\n")
+    except OSError:
+        pass
+
+# Resolve the teammate's display name from task-history spawn event if session_id is available.
+# The session-role marker holds the role (e.g. "developer"), but team config members use the
+# full teammate name (e.g. "ainous-team:developer(some-desc)"). We match on session_id first.
+resolved_teammate_name = None
+resolved_team_name = None
+
+if session_id:
+    try:
+        with open(hist_path, encoding='utf-8') as f:
+            lines = f.readlines()
+        for line in reversed(lines):
+            try:
+                ev = json.loads(line.strip())
+                if ev.get('event') != 'spawn':
+                    continue
+                if ev.get('session_id') == session_id and ev.get('spawn_mode') == 'team_name':
+                    resolved_teammate_name = ev.get('teammate_name')
+                    resolved_team_name = ev.get('team_name')
+                    _log(f"resolved via spawn event: teammate={resolved_teammate_name!r} team={resolved_team_name!r}")
+                    break
+            except (json.JSONDecodeError, ValueError):
+                continue
+    except (FileNotFoundError, OSError):
+        pass
+
+# Fallback: use the role marker as a partial match hint — ONLY when we also
+# resolved a specific team from spawn-event. Without a scoped team_name, the
+# fallback role string (e.g. "developer") would substring-match teammates in
+# every team on the system, causing cross-project DoS.
+if not resolved_teammate_name and teammate_name_arg:
+    if resolved_team_name:
+        resolved_teammate_name = teammate_name_arg
+        _log(f"fallback to session-role marker (team-scoped): {resolved_teammate_name!r}")
+    else:
+        # HIGH fix (v5.7.1): resolved_team_name is None — no safe scope to reap against.
+        # Falling through to unscoped substring matching would flip isActive=false for
+        # any teammate containing this role-string across ALL projects. Fail-closed.
+        _log(f"cannot resolve team name for fallback marker {teammate_name_arg!r} — refusing to reap without team scope (cross-project DoS prevention)")
+        sys.exit(0)
+
+if not resolved_teammate_name:
+    _log("cannot resolve teammate identity — skipping")
+    sys.exit(0)
+
+# HIGH fix (v5.7.1): resolved_team_name must be present to proceed.
+# Without it, the team-loop scoping guard below becomes a no-op and we would
+# reap teammates across every team on the system.
+if not resolved_team_name:
+    _log(f"cannot resolve team name for teammate {resolved_teammate_name!r} — refusing to reap without team scope (cross-project DoS prevention)")
+    sys.exit(0)
+
+# Scan all team configs and flip isActive: false for matching members
+if not os.path.isdir(teams_dir):
+    _log(f"teams_dir {teams_dir!r} does not exist — nothing to reap")
+    sys.exit(0)
+
+updated_count = 0
+for team_name in os.listdir(teams_dir):
+    config_path = os.path.join(teams_dir, team_name, 'config.json')
+    if not os.path.isfile(config_path):
+        continue
+    try:
+        with open(config_path, encoding='utf-8') as cf:
+            config = json.load(cf)
+    except (json.JSONDecodeError, OSError) as exc:
+        _log(f"cannot read config for team {team_name!r}: {exc}")
+        continue
+
+    # Scope guard: only touch the resolved team (required — validated non-None above)
+    if team_name != resolved_team_name:
+        continue
+
+    members = config.get('members', [])
+    if not isinstance(members, list):
+        continue
+
+    changed = False
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        if not member.get('isActive', False):
+            continue
+        name = member.get('name', '') or ''
+        # HIGH fix (v5.7.1): exact match only — substring match would deactivate
+        # multiple teammates whose name happens to contain the role-string
+        # (e.g. "developer" matching "ainous-team:developer(proj-a)" AND
+        # "ainous-team:developer(proj-b)"). Only the one resolved teammate is reaped.
+        if name == resolved_teammate_name:
+            member['isActive'] = False
+            changed = True
+            _log(f"flipped isActive=false for member {name!r} in team {team_name!r}")
+
+    if changed:
+        try:
+            with open(config_path, 'w', encoding='utf-8') as cf:
+                json.dump(config, cf, indent=2)
+                cf.write('\n')
+            updated_count += 1
+        except OSError as exc:
+            _log(f"cannot write config for team {team_name!r}: {exc}")
+
+_log(f"lifecycle reap complete: updated {updated_count} team config(s) for teammate {resolved_teammate_name!r}")
+sys.exit(0)
+PYEOF
+
+) 2>>"$_ERROR_LOG" || true
+
+exit 0

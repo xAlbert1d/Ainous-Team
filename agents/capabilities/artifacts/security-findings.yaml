@@ -1,0 +1,8 @@
+name: security-findings
+version: 1
+producer: security
+consumer: developer
+informed_roles: [architect, coordinator, tester]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/security-findings*.md"
+required_sections: []
+required_frontmatter: []

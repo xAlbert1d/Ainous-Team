@@ -1,0 +1,6 @@
+{
+  "event_type": "routing-decision",
+  "required": ["timestamp", "task_id", "selected", "role", "topology", "phases"],
+  "optional": ["schema", "session_id", "event", "type", "typed_candidates", "filtered"],
+  "enums": {}
+}

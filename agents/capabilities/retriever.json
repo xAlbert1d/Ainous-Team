@@ -1,0 +1,16 @@
+{
+  "role": "retriever",
+  "version": "1.1",
+  "preferred_spawn_mode": "agent",
+  "model": "haiku",
+  "description": "Filters role knowledge by task relevance — fast stateless lookup",
+  "task_types": ["knowledge-retrieval", "context-filtering", "playbook-lookup"],
+  "input_artifacts": ["task-description", "role-name"],
+  "output_artifacts": ["filtered-context"],
+  "keywords": ["retrieve", "find relevant", "filter context", "lookup"],
+  "anti_keywords": ["implement", "design", "document", "test", "review"],
+  "max_parallel": 4,
+  "topology_phases": ["all"],
+  "default_skills": [],
+  "conditional_skills": []
+}

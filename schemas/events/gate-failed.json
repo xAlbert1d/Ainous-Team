@@ -1,0 +1,8 @@
+{
+  "event_type": "gate-failed",
+  "required": ["timestamp", "event", "phase"],
+  "optional": ["schema", "session_id", "failure_mode", "halt_reason"],
+  "enums": {
+    "event": ["gate-failed"]
+  }
+}

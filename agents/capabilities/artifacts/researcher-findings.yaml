@@ -1,0 +1,8 @@
+name: researcher-findings
+version: 1
+producer: researcher
+consumer: architect
+informed_roles: [developer, security, coordinator]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/researcher-findings*.md"
+required_sections: []
+required_frontmatter: []

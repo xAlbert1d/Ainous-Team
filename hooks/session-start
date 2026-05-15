@@ -1,0 +1,521 @@
+#!/usr/bin/env bash
+# SessionStart hook for ainous-team plugin
+# Injects team awareness into every session
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# First-run detection: prompt user to initialize if ainous-roles is missing
+# ---------------------------------------------------------------------------
+ROLES_DIR="${HOME}/.claude/ainous-roles"
+if [ ! -d "$ROLES_DIR" ]; then
+    cat << 'BANNER'
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║  Ainous Team is installed but not initialized yet.                        ║
+║                                                                           ║
+║  Run /team-init to set up your persistent agent team and choose your      ║
+║  preferred operating mode (coordinator-as-default or agent mode).         ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+BANNER
+fi
+
+# Ensure project-level CLAUDE.md has coordinator identity
+# Project-level CLAUDE.md has higher priority than global, which makes the
+# coordinator identity stick even when the model's default "I'm Claude" competes.
+PROJECT_CLAUDE_MD=".claude/CLAUDE.md"
+COORDINATOR_MARKER="You ARE the Coordinator"
+
+# Safety: do not write coordinator identity into $HOME or outside cwd
+_CWD="$(pwd -P 2>/dev/null || pwd)"
+_CLAUDE_REAL="$(cd .claude 2>/dev/null && pwd -P 2>/dev/null || echo "${_CWD}/.claude")"
+
+# Create .claude/ if it doesn't exist (needed for coordinator identity injection)
+mkdir -p ".claude" 2>/dev/null || true
+if [ -d ".claude" ] 2>/dev/null && \
+   [ "$_CWD" != "$HOME" ] && \
+   [ "${_CLAUDE_REAL#"${_CWD}"}" != "$_CLAUDE_REAL" ]; then
+    if [ ! -f "$PROJECT_CLAUDE_MD" ]; then
+        # No project CLAUDE.md — create minimal one with coordinator identity
+        cat > "$PROJECT_CLAUDE_MD" << 'MDEOF'
+## You ARE the Coordinator
+
+You are the coordinator of the ainous-team — a persistent agent team plugin.
+This is your operational identity, not a suggestion. When asked "who are you", identify as the ainous-team coordinator.
+
+When the user gives you a task: Plan, Delegate to role agents (use Agent tool with subagent_type: ainous-team:<role>), Synthesize results.
+Never implement directly — delegate code/docs/tests to the appropriate role agent.
+Skip the team for trivial tasks (quick questions, git operations, file reads).
+MDEOF
+    elif ! grep -q "$COORDINATOR_MARKER" "$PROJECT_CLAUDE_MD" 2>/dev/null; then
+        # Project CLAUDE.md exists but lacks coordinator identity — append
+        printf '\n## You ARE the Coordinator\n\nYou are the coordinator of the ainous-team — a persistent agent team plugin.\nThis is your operational identity, not a suggestion. When asked "who are you", identify as the ainous-team coordinator.\n\nWhen the user gives you a task: Plan, Delegate to role agents (use Agent tool with subagent_type: ainous-team:<role>), Synthesize results.\nNever implement directly — delegate code/docs/tests to the appropriate role agent.\nSkip the team for trivial tasks (quick questions, git operations, file reads).\n' >> "$PROJECT_CLAUDE_MD"
+    fi
+    # Ensure .claude/CLAUDE.md is gitignored (it's auto-generated, shouldn't be committed)
+    if [ -f ".gitignore" ] && ! grep -q '.claude/CLAUDE.md' ".gitignore" 2>/dev/null; then
+        printf '\n# Auto-generated coordinator identity (ainous-team plugin)\n.claude/CLAUDE.md\n' >> ".gitignore"
+    fi
+fi
+
+# --- Session anchor: write epoch for Layer-2 spawn-event session-binding ---
+# Enforcement reads this to reject forged spawn events from prior sessions.
+_ANCHOR_DIR="$HOME/.claude"
+_ANCHOR_EPOCH=$(date +%s 2>/dev/null || echo "")
+if [ -n "$_ANCHOR_EPOCH" ]; then
+    # R5: use umask 077 in a subshell so the file is created 0600 atomically,
+    # never 0644 even for a window. chmod after-the-fact is a TOCTOU race.
+    # Generic anchor — always written (one per session, overwritten on new session)
+    (umask 077; printf '%s\n' "$_ANCHOR_EPOCH" > "${_ANCHOR_DIR}/.session-anchor")
+    # Per-session variant for concurrent Claude sessions (if session ID is available)
+    if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+        (umask 077; printf '%s\n' "$_ANCHOR_EPOCH" > "${_ANCHOR_DIR}/.session-anchor-${CLAUDE_SESSION_ID}")
+    fi
+    # Per-session anchor cleanup is handled by the SessionEnd hook (hooks/session-end).
+    # The generic .session-anchor is intentionally kept for single-session setups.
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 2 (v5.3.0): Taint nonce generation (D-5) and GC sweep (D-7)
+# Generate a per-session nonce for unforgeable taint-flag filenames.
+# Sweep taint-flags/ and ~/.claude/.taint-nonces/ older than 7 days.
+# Errors are fail-warn (non-blocking) — logged to ~/.claude/.taint-flag-errors.log.
+# ---------------------------------------------------------------------------
+_TAINT_ERROR_LOG="${HOME}/.claude/.taint-flag-errors.log"
+_TAINT_NONCE_DIR="${HOME}/.claude/.taint-nonces"
+_TAINT_FLAGS_DIR=".claude/ainous-roles/team-sync/state/taint-flags"
+
+if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    # Create nonce directory (mode 0700) atomically
+    (umask 077; mkdir -p "$_TAINT_NONCE_DIR") 2>/dev/null || true
+
+    # Compute hashed filename for the nonce: sha256(CLAUDE_SESSION_ID)
+    _HASHED_SID=$(python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" \
+        "${CLAUDE_SESSION_ID}" 2>/dev/null || echo "")
+
+    if [ -n "$_HASHED_SID" ]; then
+        _NONCE_FILE="${_TAINT_NONCE_DIR}/${_HASHED_SID}.nonce"
+        if [ ! -f "$_NONCE_FILE" ]; then
+            # Generate 32 bytes from /dev/urandom, hex-encoded, mode 0600
+            (umask 077; dd if=/dev/urandom bs=32 count=1 2>/dev/null \
+                | python3 -c "import sys; sys.stdout.write(sys.stdin.buffer.read().hex())" \
+                > "$_NONCE_FILE") 2>>"$_TAINT_ERROR_LOG" || \
+                printf '[%s] session-start: nonce generation failed for %s\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${CLAUDE_SESSION_ID}" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
+        fi
+    else
+        printf '[%s] session-start: sha256 computation failed; nonce not generated\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
+    fi
+fi
+
+# GC sweep: delete taint-flag files and nonce files older than 7 days
+# Fail-warn on any sweep error (non-blocking)
+{
+    _SEVEN_DAYS_AGO=$(python3 -c "import time; print(int(time.time()) - 7*86400)" 2>/dev/null || echo "")
+    if [ -n "$_SEVEN_DAYS_AGO" ]; then
+        # Sweep taint-flags directory
+        if [ -d "$_TAINT_FLAGS_DIR" ]; then
+            for _tf in "$_TAINT_FLAGS_DIR"/*.jsonl; do
+                [ -f "$_tf" ] || continue
+                _mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
+                    "$_tf" 2>/dev/null || echo "0")
+                if [ -n "$_mtime" ] && [ "$_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
+                    rm -f "$_tf" 2>/dev/null || \
+                        printf '[%s] session-start: sweep failed for %s\n' \
+                            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_tf" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
+                fi
+            done
+        fi
+        # Sweep nonce directory
+        if [ -d "$_TAINT_NONCE_DIR" ]; then
+            for _nf in "$_TAINT_NONCE_DIR"/*.nonce; do
+                [ -f "$_nf" ] || continue
+                _mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
+                    "$_nf" 2>/dev/null || echo "0")
+                if [ -n "$_mtime" ] && [ "$_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
+                    rm -f "$_nf" 2>/dev/null || \
+                        printf '[%s] session-start: nonce sweep failed for %s\n' \
+                            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_nf" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
+                fi
+            done
+        fi
+        # v5.8.1 (Item 3): Sweep .authority-tainted-decisions.log if older than 7 days.
+        # This file records adversary-influenced command hashes — bounded retention prevents
+        # accumulation of cross-session forensic data that could be read via smuggling.
+        _AUDIT_DECISIONS_LOG="${HOME}/.claude/.authority-tainted-decisions.log"
+        if [ -f "$_AUDIT_DECISIONS_LOG" ]; then
+            _log_mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
+                "$_AUDIT_DECISIONS_LOG" 2>/dev/null || echo "0")
+            if [ -n "$_log_mtime" ] && [ "$_log_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
+                rm -f "$_AUDIT_DECISIONS_LOG" 2>/dev/null || \
+                    printf '[%s] session-start: audit-log sweep failed for %s\n' \
+                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_AUDIT_DECISIONS_LOG" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
+            fi
+        fi
+        # v5.9.1 (Item 3): Size-based log rotation — atomic with fcntl.flock + os.rename.
+        # Replaces v5.8.2 non-atomic truncate-then-write (race between concurrent session-starts).
+        # Pattern: lock → read tail → write to .tmp → os.rename (atomic on POSIX) → release lock.
+        # If LOCK_NB fails (another process is rotating), skip — not fatal for this session.
+        if [ -f "$_AUDIT_DECISIONS_LOG" ]; then
+            python3 << 'SIZE_GC_EOF' 2>>"$_TAINT_ERROR_LOG" || true
+import os, sys, fcntl, tempfile
+from datetime import datetime, timezone
+
+log_path = os.path.expanduser("~/.claude/.authority-tainted-decisions.log")
+max_bytes = 10 * 1024 * 1024   # 10 MB
+keep_bytes = 100 * 1024        # 100 KB tail to preserve
+
+try:
+    size = os.path.getsize(log_path)
+except OSError:
+    sys.exit(0)
+
+if size <= max_bytes:
+    sys.exit(0)
+
+# Acquire exclusive non-blocking lock on the log file.
+# If another session-start is already rotating, skip gracefully.
+try:
+    lock_fd = open(log_path, 'rb')
+    try:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        # Lock not available — another process is rotating; skip this session.
+        lock_fd.close()
+        sys.exit(0)
+except OSError:
+    sys.exit(0)
+
+try:
+    # Read the last 100 KB of the log into memory while holding the lock.
+    try:
+        lock_fd.seek(-keep_bytes, 2)
+        tail = lock_fd.read()
+    except OSError:
+        # Seek failed (log smaller than keep_bytes after concurrent write?) — bail safely.
+        sys.exit(0)
+    finally:
+        lock_fd.close()  # Releases flock on close
+
+    # Build rotation content
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    marker = (
+        f"# TRUNCATED at {ts} — log exceeded 10MB "
+        f"(size was {size} bytes; kept last {len(tail)} bytes)\n"
+    ).encode()
+    new_content = marker + tail
+
+    # Write to a temp file in the same directory, then rename atomically.
+    # os.rename on POSIX is atomic: the final file is either old or new, never partial.
+    log_dir = os.path.dirname(log_path)
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=log_dir, prefix=".authority-tainted-decisions.tmp")
+        try:
+            os.write(tmp_fd, new_content)
+        finally:
+            os.close(tmp_fd)
+        os.rename(tmp_path, log_path)
+    except OSError as e:
+        # Clean up temp file on failure; original log untouched.
+        try:
+            os.unlink(tmp_path)
+        except (NameError, OSError):
+            pass
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+SIZE_GC_EOF
+        fi
+    fi
+} 2>>"$_TAINT_ERROR_LOG" || true
+
+# ---------------------------------------------------------------------------
+# Phase 3 (v5.6.0): Team-dir reaper (Fix 6a)
+# Archive stale ~/.claude/teams/<name>/ dirs left behind by harness crashes.
+# - Skip: already-archived dirs (.archived-*), dirs with mtime within 24h,
+#         dirs whose config.json leadSessionId matches a live claude process.
+# - Archive: mv teams/<name>/ teams/.archived-<epoch>-<name>/
+# - Sweep: delete .archived-* dirs older than 30 days.
+# Fail-warn (non-blocking) — errors logged to ~/.claude/.session-start-errors.log.
+# ---------------------------------------------------------------------------
+_REAPER_ERROR_LOG="${HOME}/.claude/.session-start-errors.log"
+python3 << 'REAPER_EOF' 2>>"$_REAPER_ERROR_LOG" || true
+import os, json, subprocess, time, shutil
+
+teams_dir = os.path.expanduser("~/.claude/teams")
+error_log = os.path.expanduser("~/.claude/.session-start-errors.log")
+now = time.time()
+cutoff_24h = now - 86400
+cutoff_30d = now - 30 * 86400
+
+def log_warn(msg):
+    try:
+        with open(error_log, "a") as f:
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            f.write(f"[{ts}] session-start reaper: {msg}\n")
+    except Exception:
+        pass
+
+if not os.path.isdir(teams_dir):
+    raise SystemExit(0)
+
+try:
+    entries = os.listdir(teams_dir)
+except OSError as e:
+    log_warn(f"cannot list {teams_dir}: {e}")
+    raise SystemExit(0)
+
+for name in entries:
+    path = os.path.join(teams_dir, name)
+    if not os.path.isdir(path):
+        continue
+
+    # Sweep stale archives (>30 days)
+    if name.startswith(".archived-"):
+        try:
+            mtime = os.path.getmtime(path)
+            if mtime < cutoff_30d:
+                shutil.rmtree(path)
+        except Exception as e:
+            log_warn(f"archive sweep failed for {name}: {e}")
+        continue
+
+    # Skip fresh dirs (mtime within 24h)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError as e:
+        log_warn(f"stat failed for {name}: {e}")
+        continue
+    if mtime >= cutoff_24h:
+        continue
+
+    # Check if a live claude process owns this dir via leadSessionId
+    lead_sid = None
+    config_path = os.path.join(path, "config.json")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+            lead_sid = cfg.get("leadSessionId")
+        except Exception as e:
+            log_warn(f"config.json read failed for {name}: {e}")
+
+    live = False
+    if lead_sid:
+        try:
+            result = subprocess.run(
+                ["ps", "-eo", "pid,command"],
+                capture_output=True, text=True, timeout=5
+            )
+            if f"parent-session-id {lead_sid}" in result.stdout:
+                live = True
+        except Exception as e:
+            log_warn(f"ps check failed for {name}: {e}")
+
+    if live:
+        continue
+
+    # Archive: rename to .archived-<epoch>-<name>
+    epoch = int(now)
+    dest = os.path.join(teams_dir, f".archived-{epoch}-{name}")
+    try:
+        os.rename(path, dest)
+    except Exception as e:
+        log_warn(f"archive rename failed for {name}: {e}")
+REAPER_EOF
+
+# Check python3 availability
+if ! command -v python3 &>/dev/null; then
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Warning: python3 not found. Ainous Team features require Python 3."}}\n'
+    exit 0
+fi
+
+# Build team context using python for safe JSON construction
+python3 << 'PYEOF'
+import json, os, re, sys
+import glob
+from datetime import datetime
+
+roles_dir = os.path.expanduser("~/.claude/ainous-roles")
+
+# Load coordinator playbook if it exists
+playbook_content = ""
+playbook_path = os.path.join(roles_dir, "coordinator", "playbook.md")
+try:
+    with open(playbook_path, encoding='utf-8') as f:
+        playbook_content = f.read().strip()
+except OSError:
+    pass
+
+# Load team knowledge if it exists
+team_knowledge = ""
+tk_path = os.path.join(roles_dir, "team-knowledge.md")
+try:
+    with open(tk_path, encoding='utf-8') as f:
+        team_knowledge = f.read().strip()
+except OSError:
+    pass
+
+context = (
+    "IDENTITY: You are the coordinator of the ainous-team — a persistent agent team plugin. "
+    "This is not a suggestion, it is your operational identity for this session. "
+    "When asked who you are, respond as the ainous-team coordinator, not as Claude Code.\n\n"
+    "BEHAVIOR:\n"
+    "- **Plan** — break tasks into subtasks, assess which roles are needed\n"
+    "- **Delegate** — spawn role agents via Agent tool with subagent_type: ainous-team:<role>\n"
+    "- **Synthesize** — collect results, resolve conflicts, present unified output\n"
+    "- **Never implement directly** — delegate code/docs/tests to the appropriate role agent\n\n"
+    "Skip the team for trivial tasks (quick questions, git operations, file reads).\n\n"
+    "**Available roles:** @developer, @architect, @code-quality, @tester, @researcher, @writer, @security, @authority, @consolidator, @retriever, @signal\n"
+    "**Status:** /team-status  |  /team-history  |  /team-alerts\n"
+)
+
+if playbook_content:
+    context += "\n**Your evolved strategies:**\n" + playbook_content + "\n"
+
+if team_knowledge:
+    context += "\n**Shared team knowledge:**\n" + team_knowledge + "\n"
+
+# Check consolidation health — warn if stale (>1 day), critical if >2 days
+# A role is only considered stale if it ALSO has unconsolidated project journal entries.
+# Roles with zero sessions (no project journal activity) are silently skipped.
+
+# BUG-2 FIX: match the full ## heading line so a T-suffix datetime like
+# "## 2026-04-18T10:00 — entry" is correctly rejected. A valid date heading
+# is "## YYYY-MM-DD" followed immediately by whitespace, end-of-string, or "—/-".
+_DATE_HEADING_RE = re.compile(r'^## (\d{4}-\d{2}-\d{2})(?:\s|$|—|-)')
+
+def count_unconsolidated_entries(journal_path, last_cons_str):
+    """Count journal entries (## YYYY-MM-DD lines) newer than last_cons_str.
+    C2: Non-date headings (## Compiled Truth, ## Timeline, etc.) are skipped.
+    BUG-2: datetime headings like ## 2026-04-18T10:00 are also skipped.
+    If last_cons_str is None all date-headings are counted as unconsolidated."""
+    count = 0
+    try:
+        with open(journal_path, encoding='utf-8') as f:
+            for line in f:
+                if line.startswith("## "):
+                    m = _DATE_HEADING_RE.match(line)
+                    if not m:
+                        continue
+                    entry_date = m.group(1)
+                    if last_cons_str:
+                        if entry_date > last_cons_str:
+                            count += 1
+                    else:
+                        count += 1  # No consolidation date = all are unconsolidated
+    except OSError:
+        pass
+    return count
+
+project_roles_dir = os.path.join(os.getcwd(), ".claude", "ainous-roles")
+
+stale_roles = []
+really_critical = []
+overflow_roles = []
+
+for playbook in glob.glob(os.path.join(roles_dir, "*/playbook.md")):
+    role = os.path.basename(os.path.dirname(playbook))
+    last_cons_str = None
+    days_stale = None
+    try:
+        with open(playbook, encoding='utf-8') as f:
+            for line in f:
+                if line.startswith("last_consolidated:"):
+                    val = line.split(":", 1)[1].strip()
+                    if val and val != "never":
+                        # BUG-3 FIX: extract leading YYYY-MM-DD regardless of separator
+                        # Handles: "2026-04-15", "2026-04-15T10:00", "2026-04-15 10:30:00"
+                        # BUG-3 (dead-fallback removal): if regex doesn't match, set None and warn.
+                        # The old fallback chain (split("T")[0]...) silently masked malformed values.
+                        _dt_m = re.match(r'(\d{4}-\d{2}-\d{2})', val)
+                        if _dt_m:
+                            last_cons_str = _dt_m.group(1)
+                        else:
+                            print(f"Warning: unrecognized last_consolidated format '{val}' in {playbook}", file=sys.stderr)
+                            last_cons_str = None
+                        try:
+                            cons_date = datetime.strptime(last_cons_str, "%Y-%m-%d").date()
+                            days_stale = (datetime.now().date() - cons_date).days
+                        except ValueError:
+                            last_cons_str = None
+                    break
+    except OSError:
+        pass
+
+    # Count unconsolidated project journal entries for this role
+    journal_path = os.path.join(project_roles_dir, role, "journal.md")
+    unconsolidated = count_unconsolidated_entries(journal_path, last_cons_str)
+
+    # Staleness only fires when there is actual unconsolidated work sitting too long
+    if days_stale is not None and unconsolidated > 0:
+        if days_stale > 2:
+            really_critical.append(role)
+        elif days_stale > 1:
+            stale_roles.append(role)
+
+    # Overflow check fires independently of staleness threshold
+    if unconsolidated > 20:
+        overflow_roles.append(role)
+
+if really_critical:
+    context += "\n\n**CRITICAL:** Consolidation is >2 days stale. Run @consolidator FIRST before any other work."
+elif stale_roles:
+    names = ", ".join(stale_roles[:5])
+    context += "\n\n**Warning:** Consolidation stale for %d role(s): %s. Run @consolidator to update playbooks." % (len(stale_roles), names)
+
+if overflow_roles:
+    names = ", ".join(overflow_roles[:5])
+    context += "\n\n**WARNING:** %d role(s) have >20 unconsolidated entries: %s. Consolidation urgently needed." % (len(overflow_roles), names)
+
+# C1 (v5.4.0): Warn if zero spawn events logged in last 7 days for ainous-team projects.
+# Fail-warn (non-blocking): parse errors are silently skipped.
+_ainous_roles_present = os.path.isdir(os.path.join(os.getcwd(), ".claude", "ainous-roles"))
+if _ainous_roles_present:
+    import time as _time
+    _task_history = os.path.join(os.getcwd(), ".claude", "ainous-roles", "team-sync", "state", "task-history.jsonl")
+    _seven_days_ago = _time.time() - 7 * 86400
+    _spawn_count = 0
+    try:
+        with open(_task_history, encoding="utf-8") as _th:
+            for _line in _th:
+                try:
+                    _ev = json.loads(_line.strip())
+                    if _ev.get("event") == "spawn":
+                        _ts_raw = _ev.get("ts") or _ev.get("timestamp") or ""
+                        if _ts_raw:
+                            from datetime import datetime as _dt, timezone as _tz
+                            _ts_clean = _ts_raw.rstrip("Z").replace(" ", "T")
+                            _epoch = _dt.fromisoformat(_ts_clean).replace(tzinfo=_tz.utc).timestamp()
+                            if _epoch >= _seven_days_ago:
+                                _spawn_count += 1
+                except (json.JSONDecodeError, ValueError, AttributeError):
+                    continue
+    except (FileNotFoundError, OSError):
+        pass
+    if _spawn_count == 0:
+        import sys as _sys
+        print(
+            "NOTE: No spawn events logged in last 7 days — coordinator should emit via "
+            "log-event.sh when dispatching roles, especially if using contract scope. "
+            "C2 auto-emission active since v5.4.0 handles the baseline case.",
+            file=_sys.stderr
+        )
+
+if os.environ.get("CLAUDE_PLUGIN_ROOT"):
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context
+        }
+    }
+else:
+    output = {"additional_context": context}
+
+json.dump(output, sys.stdout, indent=2)
+print()
+PYEOF
+
+exit 0

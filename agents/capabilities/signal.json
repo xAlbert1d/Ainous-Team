@@ -1,0 +1,19 @@
+{
+  "role": "signal",
+  "version": "1.1",
+  "preferred_spawn_mode": "auto",
+  "model": "sonnet",
+  "description": "Monitors external sources for team-relevant intelligence — GitHub, HN, ArXiv, blogs",
+  "task_types": ["external-scan", "trend-monitoring", "competitive-intel", "research-scan"],
+  "input_artifacts": ["subscriptions.md", "scan-query"],
+  "output_artifacts": ["signal-findings.md", "learnings.jsonl"],
+  "keywords": ["scan", "monitor", "trends", "external", "github", "research", "what's new", "signal", "deep scan", "targeted", "arxiv", "hackernews", "product hunt", "rss", "intelligence"],
+  "anti_keywords": ["implement", "fix bug", "write tests", "document"],
+  "max_parallel": 2,
+  "topology_phases": ["research"],
+  "default_skills": ["verify", "source-validate", "competitive-intel"],
+  "conditional_skills": [
+    {"skill": "deep-research", "when": "scan mode is deep or targeted topic requires depth"},
+    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+  ]
+}

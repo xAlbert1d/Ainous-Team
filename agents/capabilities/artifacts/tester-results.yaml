@@ -1,0 +1,14 @@
+name: tester-results
+version: 1
+producer: tester
+consumer: coordinator
+informed_roles: [developer, code-quality]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/tester-results*.md"
+required_sections:
+  - "Results Table"
+required_frontmatter:
+  - role
+  - session
+  - source
+  - discovered
+  - verified

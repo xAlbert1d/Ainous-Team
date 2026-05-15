@@ -1,0 +1,6 @@
+{
+  "version": "1.0",
+  "description": "Agent capability registry — coordinator uses this for mechanical routing",
+  "roles": ["coordinator", "developer", "architect", "tester", "researcher", "writer", "security", "code-quality", "authority", "consolidator", "retriever", "signal"],
+  "routing_hint": "Match task keywords against role keywords; break ties using topology_phases; use anti_keywords to exclude; prefer lower max_parallel roles for sequential tasks"
+}

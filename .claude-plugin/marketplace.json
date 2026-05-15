@@ -1,0 +1,16 @@
+{
+  "name": "ainous-team",
+  "description": "Ainous Team — persistent agent team with evolving playbooks, trust progression, and authority governance",
+  "owner": {
+    "name": "albert1d@xdimension",
+    "email": "numbertwo@xdimension.ai"
+  },
+  "plugins": [
+    {
+      "name": "ainous-team",
+      "description": "Persistent agent team with evolving playbooks, trust progression, and authority governance",
+      "version": "5.9.4",
+      "source": "./"
+    }
+  ]
+}

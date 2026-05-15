@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# skill-telemetry — PostToolUse hook for ainous-team plugin
+# Mechanically emits skill-invoked events to task-history.jsonl (source: hook-auto).
+# Path C hybrid: adds mechanical capture alongside existing instruction-based emission.
+#
+# FAIL-OPEN: all logic runs in a subshell; exits 0 unconditionally.
+# Failures are logged to $HOME/.claude/ainous-team-telemetry.log.
+#
+# PostToolUse payload (stdin, JSON):
+#   tool_name     — "Skill" | "Agent" (matched by hooks.json)
+#   tool_input    — object with skill (Skill) or subagent_type (Agent)
+#   session_id    — Claude session ID (v4.14.0: also written to event as session_id field)
+
+set -uo pipefail
+# NOTE: no -e — we handle errors in the subshell; outer script exits 0 always
+
+_DEBUG_LOG="${HOME}/.claude/ainous-team-telemetry.log"
+
+(
+    # Read stdin — Claude Code passes PostToolUse payload as JSON
+    INPUT=$(cat 2>/dev/null || true)
+    if [ -z "$INPUT" ]; then
+        printf '[%s] skill-telemetry: empty stdin — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_DEBUG_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    # Determine project root
+    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    TASK_HISTORY="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/task-history.jsonl"
+
+    # Read role from per-pane marker, fallback to shared marker, fallback to "unknown"
+    ROLE="unknown"
+    if [ -n "${TMUX_PANE:-}" ] && [ -f "${HOME}/.claude/.session-role-${TMUX_PANE}" ]; then
+        ROLE=$(cat "${HOME}/.claude/.session-role-${TMUX_PANE}" 2>/dev/null || echo "unknown")
+    elif [ -f "${HOME}/.claude/.session-role" ]; then
+        ROLE=$(cat "${HOME}/.claude/.session-role" 2>/dev/null || echo "unknown")
+    fi
+    # Trim whitespace/newlines
+    ROLE=$(printf '%s' "$ROLE" | tr -d '[:space:]')
+    [ -z "$ROLE" ] && ROLE="unknown"
+
+    # Parse payload with python3 (fail-open: if python3 unavailable, log and skip)
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] skill-telemetry: python3 not found — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_DEBUG_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    python3 - "$INPUT" "$ROLE" "$TASK_HISTORY" << 'PYEOF'
+import sys, json, os
+from datetime import datetime, timezone
+
+raw_input = sys.argv[1]
+role      = sys.argv[2]
+hist_path = sys.argv[3]
+
+debug_log = os.path.expanduser("~/.claude/ainous-team-telemetry.log")
+
+def _log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(debug_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{ts}] skill-telemetry: {msg}\n")
+    except OSError:
+        pass
+
+try:
+    payload = json.loads(raw_input)
+except (json.JSONDecodeError, ValueError) as exc:
+    _log(f"malformed stdin JSON — skipping ({exc})")
+    sys.exit(0)
+
+session_id = payload.get("session_id", "")
+tool_name = payload.get("tool_name", "")
+tool_input = payload.get("tool_input", {})
+if not isinstance(tool_input, dict):
+    tool_input = {}
+
+# Determine skill name and tool field
+if tool_name == "Skill":
+    skill_name = tool_input.get("skill") or tool_input.get("name") or "unknown-skill"
+    tool_field = "Skill"
+elif tool_name == "Agent":
+    skill_name = tool_input.get("subagent_type") or "general-purpose"
+    tool_field = "Agent"
+else:
+    # Not a Skill/Agent call — nothing to emit
+    sys.exit(0)
+
+now = datetime.now(timezone.utc)
+timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+session_date = now.strftime("%Y-%m-%d")
+
+# Emit via log-event.sh — schema v4.14.0 fields preserved; schema:"1" added by wrapper.
+# Fail-open: fall back to direct write if log-event.sh is unavailable.
+import subprocess, shutil
+
+log_event_script = os.path.join(os.path.dirname(hist_path).split(".claude")[0], "scripts", "log-event.sh")
+# Derive project root from hist_path: hist_path = <root>/.claude/...
+project_root = hist_path.split("/.claude/")[0] if "/.claude/" in hist_path else os.path.dirname(hist_path)
+log_event_script = os.path.join(project_root, "scripts", "log-event.sh")
+
+emitted = False
+if os.path.isfile(log_event_script):
+    try:
+        result = subprocess.run(
+            [
+                "bash", log_event_script,
+                "skill-invoked",
+                f"role={role}",
+                f"skill={skill_name}",
+                f"tool={tool_field}",
+                f"session={session_date}",
+                f"session_id={session_id}",
+                f"source=hook-auto",
+                f"timestamp={timestamp}",
+            ],
+            env={**os.environ, "CLAUDE_PROJECT_DIR": project_root},
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            _log(f"emitted {tool_field} event via log-event.sh: skill={skill_name} role={role}")
+            emitted = True
+        else:
+            _log(f"log-event.sh returned {result.returncode} — falling back to direct write")
+    except Exception as exc:
+        _log(f"log-event.sh invocation failed ({exc}) — falling back to direct write")
+
+if not emitted:
+    # Fallback: direct write (preserves fail-open guarantee)
+    event = {
+        "timestamp":  timestamp,
+        "event":      "skill-invoked",
+        "role":       role,
+        "skill":      skill_name,
+        "tool":       tool_field,
+        "session":    session_date,
+        "session_id": session_id,
+        "source":     "hook-auto",
+    }
+    os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+    try:
+        with open(hist_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+        _log(f"emitted {tool_field} event (fallback): skill={skill_name} role={role}")
+    except OSError as exc:
+        _log(f"failed to write event to {hist_path}: {exc}")
+
+sys.exit(0)
+PYEOF
+
+) 2>>"$_DEBUG_LOG" || true
+
+exit 0

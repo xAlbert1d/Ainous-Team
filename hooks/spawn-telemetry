@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+# spawn-telemetry — PostToolUse hook for ainous-team plugin
+# Mechanically emits spawn events to task-history.jsonl on Agent tool calls (source: hook-auto).
+# Mirrors skill-telemetry envelope exactly (Phase 3a / v5.4.0).
+#
+# FAIL-OPEN: all logic runs in a subshell; exits 0 unconditionally.
+# Failures are logged to $HOME/.claude/.spawn-telemetry-errors.log.
+#
+# PostToolUse payload (stdin, JSON):
+#   tool_name     — "Agent" (matched by hooks.json)
+#   tool_input    — object with subagent_type, name, team_name, run_in_background, prompt
+#   session_id    — Claude session ID (parent session)
+#   tool_result   — optional object; may carry session_id of child Agent session
+#                   (field name `session_id` — empirically verified 2026-04-19 via binary strings inspection)
+#
+# Empirically verified env vars (2026-04-19 via `strings claude-binary | grep -oE 'CLAUDE_[A-Z_]+'`):
+#   CLAUDE_CODE_TEAMMATE_COMMAND — set only for real team-mode teammates (positive signal)
+#   CLAUDE_CODE_TEAM_NAME       — set for team context (corroborating signal)
+#   CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME — set for internal team members
+#   FABRICATED (not in binary): CLAUDE_TEAM_NAME, CLAUDE_TEAM_ROLE
+
+set -uo pipefail
+# NOTE: no -e — we handle errors in the subshell; outer script exits 0 always
+
+_ERROR_LOG="${HOME}/.claude/.spawn-telemetry-errors.log"
+
+(
+    # Read stdin — Claude Code passes PostToolUse payload as JSON
+    INPUT=$(cat 2>/dev/null || true)
+    if [ -z "$INPUT" ]; then
+        printf '[%s] spawn-telemetry: empty stdin — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    # Determine project root
+    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    TASK_HISTORY="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/task-history.jsonl"
+
+    # Parse payload with python3 (fail-open: if python3 unavailable, log and skip)
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] spawn-telemetry: python3 not found — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    python3 - "$INPUT" "$TASK_HISTORY" << 'PYEOF'
+import sys, json, os, secrets, hashlib
+from datetime import datetime, timezone
+
+raw_input  = sys.argv[1]
+hist_path  = sys.argv[2]
+
+error_log = os.path.expanduser("~/.claude/.spawn-telemetry-errors.log")
+
+def _log(msg):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(error_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{ts}] spawn-telemetry: {msg}\n")
+    except OSError:
+        pass
+
+try:
+    payload = json.loads(raw_input)
+except (json.JSONDecodeError, ValueError) as exc:
+    _log(f"malformed stdin JSON — skipping ({exc})")
+    sys.exit(0)
+
+session_id = payload.get("session_id", "")
+tool_name = payload.get("tool_name", "")
+if tool_name != "Agent":
+    sys.exit(0)
+
+tool_input = payload.get("tool_input", {})
+if not isinstance(tool_input, dict):
+    _log("tool_input is not a dict — skipping")
+    sys.exit(0)
+
+# Derive role from subagent_type
+subagent_type = tool_input.get("subagent_type") or ""
+if subagent_type.startswith("ainous-team:"):
+    role = subagent_type[len("ainous-team:"):]
+else:
+    role = subagent_type if subagent_type else "unknown"
+
+teammate_name = tool_input.get("name") or None
+team_name     = tool_input.get("team_name") or None
+background    = bool(tool_input.get("run_in_background", False))
+
+# Privacy: never log the prompt content; log byte length only
+prompt_val    = tool_input.get("prompt") or ""
+prompt_bytes  = len(prompt_val.encode("utf-8")) if isinstance(prompt_val, str) else 0
+
+spawn_mode = "team_name" if team_name else "agent"
+
+# v5.5.0: generate write_proxy_nonce for team_name spawns (enables P-3 write-proxy HMAC)
+# For agent-mode spawns, nonce is null (write-proxy hook not applicable)
+write_proxy_nonce = secrets.token_hex(32) if spawn_mode == "team_name" else None
+
+# v5.7.0: compute sha256 of nonce for forensic correlation without leaking key material.
+# The raw nonce is NEVER written to task-history (mode 0644, read-accessible).
+# Canonical nonce source is the nonce file at ~/.claude/teams/<team>/nonces/<mate>.nonce (mode 0600).
+if write_proxy_nonce is not None:
+    write_proxy_nonce_sha256 = hashlib.sha256(write_proxy_nonce.encode()).hexdigest()
+else:
+    write_proxy_nonce_sha256 = None
+
+# v5.5.1: persist nonce to ~/.claude/teams/<team_name>/nonces/<teammate_name>.nonce
+# so teammates can Read it at startup (mirrors taint-nonce pattern from session-start).
+# Skip for agent-mode spawns (no team_name → no nonce file needed).
+# Fail-warn only: a missing nonce file is an optimization loss, not a correctness failure.
+if write_proxy_nonce and team_name and teammate_name:
+    try:
+        import stat
+        nonce_dir = os.path.expanduser(f"~/.claude/teams/{team_name}/nonces")
+        os.makedirs(nonce_dir, mode=0o700, exist_ok=True)
+        # Enforce dir mode in case makedirs reused an existing dir with looser perms
+        os.chmod(nonce_dir, stat.S_IRWXU)
+        nonce_file = os.path.join(nonce_dir, f"{teammate_name}.nonce")
+        # Write with mode 0600 via umask-equivalent: open with O_CREAT|O_WRONLY|O_TRUNC
+        fd = os.open(nonce_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, write_proxy_nonce.encode("utf-8"))
+        finally:
+            os.close(fd)
+        _log(f"nonce file written: {nonce_file}")
+    except Exception as exc:
+        _log(f"nonce file write failed (non-fatal): team={team_name} teammate={teammate_name} — {exc}")
+
+# v5.9.0 (Option A): Taint propagation across Agent boundary (ClawGuard defense).
+# If the parent session is tainted (has a non-empty taint-flag file), propagate
+# the taint to the child session so _validate_taint_field fires on the child's
+# first Write to a provenance surface. This closes the context-dependent injection
+# laundering gap described in v5.9-design-taint-boundary.md.
+#
+# Approach:
+#   1. Check parent taint state via _session_is_tainted_for(parent_sid).
+#   2. Extract child session_id from tool_result.session_id (PostToolUse payload).
+#   3. If child_sid available: write taint-flag to child's path sha256(child_sid||child_nonce).
+#      child_nonce = child's taint-nonce from ~/.claude/.taint-nonces/<sha256(child_sid)>.nonce
+#   4. Invariant D-3 preserved: hook writes taint, not the role. TAINT_FLAG_HOOK=1 env
+#      marker is set before the direct Python file I/O write (mirrors taint-flag hook pattern).
+#
+# Fail-open: if parent taint cannot be confirmed or child_sid unavailable, propagation
+# is skipped (logged). Per-session taint restriction is still enforced on the parent;
+# the gap is the child's clean session. This is acceptable per design — Option A's
+# over-blocking cost is intentional; fail-open here means the CHILD is not over-blocked
+# when propagation can't be confirmed.
+
+def _session_is_tainted_for(sid, project_root):
+    """Return (is_tainted, hashed_sid) for the given session_id. Fail-open on any error."""
+    if not sid:
+        return False, ""
+    nonce_dir = os.path.expanduser("~/.claude/.taint-nonces")
+    hashed_sid_for_nonce = hashlib.sha256(sid.encode()).hexdigest()
+    nonce_file = os.path.join(nonce_dir, f"{hashed_sid_for_nonce}.nonce")
+    try:
+        with open(nonce_file, "rb") as _nf:
+            nonce_bytes = _nf.read()
+        if not nonce_bytes:
+            return False, hashed_sid_for_nonce
+    except (FileNotFoundError, PermissionError, OSError):
+        return False, hashed_sid_for_nonce
+    combined = sid.encode() + nonce_bytes
+    hashed_filename = hashlib.sha256(combined).hexdigest()
+    flags_dir = os.path.join(project_root, ".claude", "ainous-roles", "team-sync", "state", "taint-flags")
+    flag_path = os.path.join(flags_dir, f"{hashed_filename}.jsonl")
+    if not os.path.isfile(flag_path):
+        return False, hashed_sid_for_nonce
+    try:
+        with open(flag_path, encoding="utf-8") as _fp:
+            for line in _fp:
+                if line.strip():
+                    return True, hashed_sid_for_nonce
+        return False, hashed_sid_for_nonce
+    except (OSError, PermissionError):
+        return False, hashed_sid_for_nonce
+
+def _propagate_taint_to_child(parent_sid, child_sid, project_root, ts, role_name):
+    """Write inherited taint-flag entry to child's flag file. D-3 invariant: hook writes, not role.
+    Returns True on success, False on failure (fail-open — propagation failure is logged, not fatal).
+    """
+    if not child_sid:
+        _log("taint propagation: child_sid unavailable — skipping propagation (fail-open)")
+        return False
+    # Read child's taint-nonce (written by session-start for the child's session)
+    nonce_dir = os.path.expanduser("~/.claude/.taint-nonces")
+    child_hashed_sid = hashlib.sha256(child_sid.encode()).hexdigest()
+    child_nonce_file = os.path.join(nonce_dir, f"{child_hashed_sid}.nonce")
+    try:
+        with open(child_nonce_file, "rb") as _nf:
+            child_nonce_bytes = _nf.read()
+        if not child_nonce_bytes:
+            _log(f"taint propagation: child nonce file is empty at {child_nonce_file} — skipping (fail-open)")
+            return False
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        _log(f"taint propagation: cannot read child nonce file {child_nonce_file}: {exc} — skipping (fail-open)")
+        return False
+    # Compute child's flag file path: sha256(child_sid || child_nonce_bytes)
+    child_combined = child_sid.encode() + child_nonce_bytes
+    child_hashed_filename = hashlib.sha256(child_combined).hexdigest()
+    flags_dir = os.path.join(project_root, ".claude", "ainous-roles", "team-sync", "state", "taint-flags")
+    os.makedirs(flags_dir, exist_ok=True)
+    child_flag_path = os.path.join(flags_dir, f"{child_hashed_filename}.jsonl")
+    # Compute hashed_sid of parent (for forensic upstream_chain tracing)
+    parent_hashed_sid = hashlib.sha256(parent_sid.encode()).hexdigest()
+    record = {
+        "ts":            ts,
+        "tool":          "Agent",
+        "url":           f"inherited:parent_hashed_sid={parent_hashed_sid}",
+        "content_hash":  hashlib.sha256(parent_sid.encode()).hexdigest(),
+        "role":          role_name,
+        "schema":        "1",
+        "upstream_chain": [{"inherited": True, "parent_hashed_sid": parent_hashed_sid, "ts": ts}],
+    }
+    # D-3: hook sets TAINT_FLAG_HOOK env marker before direct file I/O
+    os.environ["TAINT_FLAG_HOOK"] = "1"
+    try:
+        with open(child_flag_path, "a", encoding="utf-8") as _ff:
+            _ff.write(json.dumps(record) + "\n")
+        _log(f"taint propagation: wrote inherited taint to child flag file {child_flag_path} (parent_hashed_sid={parent_hashed_sid})")
+        return True
+    except OSError as exc:
+        _log(f"taint propagation: failed to write to {child_flag_path}: {exc}")
+        return False
+
+# Attempt taint propagation: check parent taint, then propagate to child
+project_root = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+parent_tainted, parent_hashed_sid = _session_is_tainted_for(session_id, project_root)
+
+if parent_tainted:
+    # Extract child session_id from tool_result (PostToolUse payload field).
+    # Field investigation (M1 / 2026-04-19):
+    #   - Binary strings extraction (`strings claude-binary | grep -oE 'CLAUDE_[A-Z_]+'`) confirmed
+    #     `session_id` is the correct field name used in the binary (no `child_session_id`,
+    #     `agent_session_id`, or similar variants appear).
+    #   - `tool_result` is a standard PostToolUse payload envelope key (confirmed by CLAUDE-DESIGN.md §session-log
+    #     and the binary's schema references).
+    #   - If `tool_result.session_id` is absent (Claude Code may not populate it in all versions),
+    #     propagation defers fail-open — logged below. This is an acceptable residual gap (R-6).
+    tool_result = payload.get("tool_result", {}) or {}
+    child_session_id = ""
+    if isinstance(tool_result, dict):
+        # Claude Code Agent PostToolUse: tool_result may carry session_id of spawned child session.
+        # Field name empirically verified 2026-04-19 — only `session_id` variant present in binary.
+        child_session_id = tool_result.get("session_id", "") or ""
+    if not child_session_id:
+        _log(f"taint propagation: parent is tainted (hashed_sid={parent_hashed_sid}) but child session_id not in tool_result — propagation deferred (fail-open)")
+    else:
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _propagate_taint_to_child(session_id, child_session_id, project_root, now_ts, role)
+
+now = datetime.now(timezone.utc)
+timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+event = {
+    "ts":                      timestamp,
+    "schema":                  "1",
+    "event":                   "spawn",
+    "source":                  "hook-auto",
+    "role":                    role,
+    "session_id":              session_id,
+    "teammate_name":           teammate_name,
+    "team_name":               team_name,
+    "spawn_mode":              spawn_mode,
+    "background":              background,
+    "prompt_bytes":            prompt_bytes,
+    # v5.8.0: "scope" field removed — Layer-2 contract-implied authorization was retired.
+    # Spawn events continue to emit for observability; scope is no longer carried.
+    # v5.7.0: nonce hash only — raw nonce is NOT stored here (auth bypass risk).
+    # Canonical nonce source: ~/.claude/teams/<team>/nonces/<teammate>.nonce (mode 0600).
+    "write_proxy_nonce_sha256": write_proxy_nonce_sha256,
+}
+
+os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+try:
+    with open(hist_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event) + "\n")
+    _log(f"emitted spawn event: role={role} spawn_mode={spawn_mode} background={background} prompt_bytes={prompt_bytes}")
+except OSError as exc:
+    _log(f"failed to write spawn event to {hist_path}: {exc}")
+
+sys.exit(0)
+PYEOF
+
+) 2>>"$_ERROR_LOG" || true
+
+exit 0

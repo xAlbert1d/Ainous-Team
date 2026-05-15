@@ -1,0 +1,8 @@
+{
+  "event_type": "framing-doubt",
+  "required": ["timestamp", "event", "role", "phase", "doubt"],
+  "optional": ["schema", "session_id", "blocking"],
+  "enums": {
+    "event": ["framing-doubt"]
+  }
+}

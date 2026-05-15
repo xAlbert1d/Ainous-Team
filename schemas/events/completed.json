@@ -1,0 +1,10 @@
+{
+  "event_type": "completed",
+  "required": ["timestamp", "event", "role", "phase", "contract_status"],
+  "optional": ["schema", "session_id", "artifacts", "confidence", "confidence_basis", "uncertain_areas"],
+  "enums": {
+    "event": ["completed"],
+    "contract_status": ["met", "unmet", "partial"],
+    "confidence_basis": ["tested", "reasoned", "inferred", "guessed"]
+  }
+}

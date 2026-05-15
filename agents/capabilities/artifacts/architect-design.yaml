@@ -1,0 +1,13 @@
+name: architect-design
+version: 1
+producer: architect
+consumer: developer
+informed_roles: [tester, security, coordinator]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/architect-design*.md"
+required_sections: []
+required_frontmatter:
+  - role
+  - session
+  - source
+  - discovered
+  - verified

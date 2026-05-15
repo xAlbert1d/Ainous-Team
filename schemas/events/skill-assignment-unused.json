@@ -1,0 +1,8 @@
+{
+  "event_type": "skill-assignment-unused",
+  "required": ["timestamp", "event", "role", "session"],
+  "optional": ["schema", "session_id", "assigned_count", "self_report_count", "note"],
+  "enums": {
+    "event": ["skill-assignment-unused"]
+  }
+}

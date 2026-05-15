@@ -1,0 +1,8 @@
+{
+  "event_type": "gate-passed",
+  "required": ["timestamp", "event", "phase"],
+  "optional": ["schema", "session_id", "detail", "artifacts_verified"],
+  "enums": {
+    "event": ["gate-passed"]
+  }
+}

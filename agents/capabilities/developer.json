@@ -1,0 +1,31 @@
+{
+  "role": "developer",
+  "version": "1.1",
+  "preferred_spawn_mode": "tmux",
+  "model": "sonnet",
+  "description": "Implements features, fixes bugs, writes production code",
+  "task_types": ["implementation", "bugfix", "refactor", "feature"],
+  "input_artifacts": ["architect-design.md", "researcher-findings.md", "security-findings.md"],
+  "output_artifacts": ["implementation", "learnings.jsonl"],
+  "keywords": ["implement", "build", "fix", "code", "write", "create", "add", "change", "update", "refactor", "cleanup", "technical debt", "performance", "optimization", "slow", "latency", "migration", "schema", "database change", "CI/CD", "pipeline", "deploy", "docker", "frontend", "UI", "component", "CSS", "automation", "workflow", "script", "release", "ship", "publish", "API", "endpoint", "interface", "contract", "database", "model", "ORM", "logging", "monitoring", "tracing", "metrics", "accessibility", "a11y", "screen reader", "estimate", "planning"],
+  "anti_keywords": ["design", "test strategy", "document only", "review only"],
+  "max_parallel": 3,
+  "topology_phases": ["implement"],
+  "default_skills": ["tdd", "debug", "verify", "review-response"],
+  "conditional_skills": [
+    {"skill": "refactor", "when": "task type is cleanup or technical debt"},
+    {"skill": "perf", "when": "keywords include performance, optimization, slow, latency"},
+    {"skill": "migrate", "when": "keywords include migration, schema, database change"},
+    {"skill": "devops", "when": "keywords include CI/CD, pipeline, deploy, docker"},
+    {"skill": "ui-layout", "when": "keywords include frontend, UI, component, CSS"},
+    {"skill": "workflow-auto", "when": "keywords include automation, workflow, script"},
+    {"skill": "release-gate", "when": "keywords include release, ship, deploy, publish"},
+    {"skill": "api-design", "when": "keywords include API, endpoint, interface, contract"},
+    {"skill": "data-model", "when": "keywords include database, schema, model, ORM"},
+    {"skill": "observability", "when": "keywords include logging, monitoring, tracing, metrics"},
+    {"skill": "a11y", "when": "keywords include accessibility, a11y, screen reader"},
+    {"skill": "post-mortem", "when": "task follows an incident or production failure"},
+    {"skill": "estimate", "when": "keywords include estimate, scope, planning"},
+    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "role": "code-quality",
+  "version": "1.1",
+  "preferred_spawn_mode": "auto",
+  "model": "sonnet",
+  "description": "Reviews code for bugs, style, maintainability, and adherence to conventions",
+  "task_types": ["code-review", "lint", "style-check", "maintainability", "pr-review"],
+  "input_artifacts": ["implementation"],
+  "output_artifacts": ["review-findings.md", "learnings.jsonl"],
+  "keywords": ["review", "check", "quality", "clean", "style", "lint", "maintainable", "readable"],
+  "anti_keywords": ["implement", "design", "document"],
+  "max_parallel": 2,
+  "topology_phases": ["review"],
+  "default_skills": ["verify", "refactor", "code-review-ext"],
+  "conditional_skills": [
+    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+  ]
+}
