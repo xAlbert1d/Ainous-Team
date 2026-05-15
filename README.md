@@ -2,6 +2,8 @@
 
 A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 57 skills, that learn and improve over time. v5.8.0.
 
+Built by [xdimension.ai](https://xdimension.ai)
+
 Each role accumulates knowledge across sessions: strategies that work get reinforced, strategies that fail get retired. Trust levels gate permissions so agents earn autonomy through clean performance.
 
 ## Prerequisites
