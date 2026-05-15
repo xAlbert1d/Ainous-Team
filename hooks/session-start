@@ -425,7 +425,7 @@ for playbook in glob.glob(os.path.join(roles_dir, "*/playbook.md")):
             for line in f:
                 if line.startswith("last_consolidated:"):
                     val = line.split(":", 1)[1].strip()
-                    if val and val != "never":
+                    if val and val not in ("never", "null"):
                         # BUG-3 FIX: extract leading YYYY-MM-DD regardless of separator
                         # Handles: "2026-04-15", "2026-04-15T10:00", "2026-04-15 10:30:00"
                         # BUG-3 (dead-fallback removal): if regex doesn't match, set None and warn.
