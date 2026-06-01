@@ -2,7 +2,7 @@
   "role": "researcher",
   "version": "1.1",
   "preferred_spawn_mode": "auto",
-  "model": "sonnet",
+  "model": "opus",
   "description": "Explores codebase, investigates technologies, produces findings",
   "task_types": ["research", "investigation", "exploration", "codebase-analysis", "technology-evaluation"],
   "input_artifacts": ["task-description"],
@@ -11,11 +11,10 @@
   "anti_keywords": ["implement", "fix", "write code"],
   "max_parallel": 2,
   "topology_phases": ["research"],
-  "default_skills": ["verify", "deep-research", "source-validate"],
+  "default_skills": ["verify", "deep-research", "source-validate", "confidence-calibration"],
   "conditional_skills": [
     {"skill": "competitive-intel", "when": "keywords include tool evaluation, comparison, alternatives, market"},
     {"skill": "knowledge-structure", "when": "keywords include organize findings, summarize, structure"},
-    {"skill": "onboard", "when": "keywords include new codebase, unfamiliar, first time, getting started"},
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+    {"skill": "onboard", "when": "keywords include new codebase, unfamiliar, first time, getting started"}
   ]
 }

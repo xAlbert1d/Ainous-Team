@@ -11,7 +11,7 @@
   "anti_keywords": ["implement", "fix bug", "write tests"],
   "max_parallel": 1,
   "topology_phases": ["design"],
-  "default_skills": ["design", "verify", "api-design", "premise-check"],
+  "default_skills": ["design", "verify", "api-design", "premise-check", "confidence-calibration"],
   "conditional_skills": [
     {"skill": "perf", "when": "keywords include performance, latency, throughput, scaling"},
     {"skill": "migrate", "when": "keywords include migration, schema, data model evolution"},
@@ -27,7 +27,6 @@
     {"skill": "negotiate", "when": "keywords include conflicting requirements, tradeoff decision"},
     {"skill": "test-strategy", "when": "keywords include test architecture, testability"},
     {"skill": "observability", "when": "keywords include monitoring, alerting, SLO"},
-    {"skill": "workflow-auto", "when": "keywords include workflow design, automation"},
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+    {"skill": "workflow-auto", "when": "keywords include workflow design, automation"}
   ]
 }

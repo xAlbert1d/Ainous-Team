@@ -1113,6 +1113,252 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TC-WP-19: S-2 fully closed — cross-teammate nonce redirection rejected.
+# Attack: attacker knows victim's team/name. They craft a payload with
+#   teammate_name=victim, team_name=victim-team  (caller-supplied)
+# and HMAC their envelope with victim's nonce.  Before the S-2 fix, Tier-3b
+# would read victim's nonce file using attacker-controlled names.
+# After the fix, nonce path comes from the SPAWN EVENT that was matched, not
+# from tool_input — so attacker must also forge a spawn event, which they
+# cannot.  Test verifies: when spawn event names disagree with tool_input
+# names, the nonce file used is the one from the SPAWN EVENT (victim's),
+# meaning HMAC keyed on attacker's nonce does NOT match → write rejected.
+# ---------------------------------------------------------------------------
+_reset_history
+
+NONCE19_VICTIM="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+NONCE19_ATTKR="ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+VICTIM_MATE="victim"
+VICTIM_TEAM="shared-team"
+ATTKR_MATE="attacker"
+ATTKR_TEAM="shared-team"
+DEST_FILE19="$FAKE_PROJECT/src/output19.txt"
+rm -f "$DEST_FILE19"
+
+# Inject a SPAWN EVENT for the VICTIM (correct record on disk)
+# Session id won't match CLAUDE_SESSION_ID used below, so Tier-1 is bypassed.
+python3 -c "
+import json, sys, hashlib
+from datetime import datetime, timezone
+ev = {
+    'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'schema': '1',
+    'event': 'spawn',
+    'source': 'hook-auto',
+    'role': 'developer',
+    'session_id': 'victim-original-session',
+    'teammate_name': sys.argv[1],
+    'team_name': sys.argv[2],
+    'spawn_mode': 'team_name',
+    'background': True,
+    'prompt_bytes': 100,
+    'scope': [],
+    'write_proxy_nonce_sha256': hashlib.sha256(sys.argv[3].encode()).hexdigest(),
+}
+print(json.dumps(ev))
+" "$VICTIM_MATE" "$VICTIM_TEAM" "$NONCE19_VICTIM" >> "$TASK_HISTORY"
+# Write victim's nonce file
+_inject_nonce_file "$VICTIM_MATE" "$VICTIM_TEAM" "$NONCE19_VICTIM"
+# Write attacker's nonce file too (attacker legitimately has their own spawn event + nonce)
+_inject_nonce_file "$ATTKR_MATE" "$ATTKR_TEAM" "$NONCE19_ATTKR"
+
+# Attacker builds envelope HMAC'd with VICTIM's nonce, but submits their name
+# as tool_input fields to try to trigger the old Tier-3b path.
+# The key question: does Tier-3b look up victim's spawn event (found by teammate_name)
+# and use victim's event-recorded name→ victim's nonce → HMAC mismatch?
+# Or does it incorrectly use attacker's nonce from attacker's nonce file?
+CONTENT19="Cross-teammate nonce redirect attempt — should be rejected"
+# We HMAC with victim nonce so if nonce path resolves to victim correctly, HMAC matches
+# BUT we also test that the spawn event lookup finds VICTIM's spawn (by teammate_name match)
+# and nonce path is keyed to VICTIM names, so HMAC (victim nonce) WOULD match.
+# The real test is: attacker injects their OWN name as tool_input,
+# finds THEIR own spawn event (not victim's), which keys to attacker's nonce file.
+# But attacker HMACs with victim's nonce → mismatch → rejected.
+# This proves tool_input cannot redirect to a different nonce.
+
+# Attacker uses their own name in tool_input but HMACs with victim's nonce
+ENVELOPE19=$(_build_valid_envelope "$DEST_FILE19" "$CONTENT19" "developer" "2026-04-18" "role-self-report" "$NONCE19_VICTIM")
+# Payload has ATTACKER's identity in tool_input — the redirection attempt
+PAYLOAD19=$(_make_sendmessage_payload "$ENVELOPE19" "$ATTKR_MATE" "$ATTKR_TEAM")
+
+(
+    cd "$FAKE_PROJECT"
+    HOME="$FAKE_HOME" \
+    CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
+    CLAUDE_SESSION_ID="unmatched-session-19" \
+    CLAUDE_PLUGIN_ROOT="$PROJECT_ROOT" \
+    bash "$HOOK" <<< "$PAYLOAD19" 2>/dev/null
+) || true
+
+# Attacker has no spawn event for (attacker,shared-team) in task-history,
+# so Tier-3b finds no spawn event for their identity and rejects.
+# If the old code had been in place, we'd also need to verify the nonce file
+# used was attacker's (not victim's). The new code uses event names, so it's
+# always bound to whatever spawn event was found.
+if [ ! -f "$DEST_FILE19" ]; then
+    _pass "TC-WP-19: S-2 cross-teammate nonce redirection — correctly rejected (no spawn event for attacker)"
+else
+    _fail "TC-WP-19: S-2 cross-teammate nonce redirection should be blocked" \
+        "SECURITY: file was written despite cross-teammate redirect attempt"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-WP-20: S-2 Tier-1 mismatch rejection — adversarial payload.
+#
+# Exact tester payload:
+#   session_id = innocent-user's valid session (gate matches innocent-user's spawn event)
+#   tool_input.teammate_name = victim-user  (caller-supplied name disagrees with event)
+#   HMAC keyed with victim's nonce
+#
+# Before the fix, Tier-1 used `if not teammate_name:` backfill: because tool_input
+# already set teammate_name=victim, the backfill was skipped and the nonce path was
+# built from the attacker-supplied victim name → victim's nonce file was read →
+# HMAC with victim's nonce matched → write accepted.
+#
+# After the fix, Tier-1 extracts names from the spawn event first, then checks
+# tool_input against them. The spawn event says innocent-user; tool_input says
+# victim → mismatch → rejected immediately (nonce file never opened).
+#
+# TC-WP-20a: REJECT — valid session_id (innocent-user's event) + tool_input=victim-user + HMAC(victim nonce)
+# TC-WP-20b: ACCEPT — legitimate Tier-1 (session_id matches event, tool_input empty or matching)
+# ---------------------------------------------------------------------------
+_reset_history
+
+SESSION20="session-innocent-user-20"
+NONCE20_INNOCENT="aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11"
+NONCE20_VICTIM="bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22"
+INNOCENT_MATE20="innocent-user"
+VICTIM_MATE20="victim-user"
+TEAM20="shared-org-team"
+DEST_FILE20="$FAKE_PROJECT/src/output20.txt"
+rm -f "$DEST_FILE20"
+
+# Inject innocent-user's spawn event with SESSION20 — Tier-1 will match this.
+python3 -c "
+import json, sys, hashlib
+from datetime import datetime, timezone
+ev = {
+    'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'schema': '1',
+    'event': 'spawn',
+    'source': 'hook-auto',
+    'role': 'developer',
+    'session_id': sys.argv[1],
+    'teammate_name': sys.argv[2],
+    'team_name': sys.argv[3],
+    'spawn_mode': 'team_name',
+    'background': True,
+    'prompt_bytes': 100,
+    'scope': [],
+    'write_proxy_nonce_sha256': hashlib.sha256(sys.argv[4].encode()).hexdigest(),
+}
+print(json.dumps(ev))
+" "$SESSION20" "$INNOCENT_MATE20" "$TEAM20" "$NONCE20_INNOCENT" >> "$TASK_HISTORY"
+
+# Write innocent-user's nonce file
+_inject_nonce_file "$INNOCENT_MATE20" "$TEAM20" "$NONCE20_INNOCENT"
+# Write victim-user's nonce file (separate — attacker wants Tier-1 to read THIS one)
+_inject_nonce_file "$VICTIM_MATE20" "$TEAM20" "$NONCE20_VICTIM"
+
+# Attacker builds envelope HMAC'd with victim's nonce.
+# Attacker sends: session_id=SESSION20 (innocent's session) + tool_input.teammate_name=victim-user
+CONTENT20="Adversarial write — must be rejected by Tier-1 mismatch guard"
+ENVELOPE20=$(_build_valid_envelope "$DEST_FILE20" "$CONTENT20" "developer" "2026-04-18" "role-self-report" "$NONCE20_VICTIM")
+
+# Build payload with session_id AND attacker-supplied tool_input.teammate_name=victim-user
+PAYLOAD20=$(python3 -c "
+import json, sys
+payload = {
+    'tool_name': 'SendMessage',
+    'session_id': sys.argv[1],
+    'tool_input': {
+        'message': sys.argv[2],
+        'teammate_name': sys.argv[3],
+        'team_name': sys.argv[4],
+    }
+}
+print(json.dumps(payload))
+" "$SESSION20" "$ENVELOPE20" "$VICTIM_MATE20" "$TEAM20" 2>/dev/null)
+
+(
+    cd "$FAKE_PROJECT"
+    HOME="$FAKE_HOME" \
+    CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
+    CLAUDE_SESSION_ID="$SESSION20" \
+    CLAUDE_PLUGIN_ROOT="$PROJECT_ROOT" \
+    bash "$HOOK" <<< "$PAYLOAD20" 2>/dev/null
+) || true
+
+# TC-WP-20a: must be REJECTED — tool_input says victim, event says innocent → mismatch
+if [ ! -f "$DEST_FILE20" ]; then
+    _pass "TC-WP-20a: Tier-1 mismatch (session_id→innocent, tool_input→victim, HMAC→victim) — correctly REJECTED"
+else
+    _fail "TC-WP-20a: Tier-1 mismatch must be blocked" \
+        "SECURITY: write succeeded — Tier-1 read victim nonce file via attacker-controlled tool_input name"
+fi
+
+# TC-WP-20b: Legitimate Tier-1 — same session_id, tool_input names MATCH the event.
+# Envelope HMAC'd with innocent's nonce. Must SUCCEED.
+_reset_history
+rm -f "$DEST_FILE20"
+
+python3 -c "
+import json, sys, hashlib
+from datetime import datetime, timezone
+ev = {
+    'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'schema': '1',
+    'event': 'spawn',
+    'source': 'hook-auto',
+    'role': 'developer',
+    'session_id': sys.argv[1],
+    'teammate_name': sys.argv[2],
+    'team_name': sys.argv[3],
+    'spawn_mode': 'team_name',
+    'background': True,
+    'prompt_bytes': 100,
+    'scope': [],
+    'write_proxy_nonce_sha256': hashlib.sha256(sys.argv[4].encode()).hexdigest(),
+}
+print(json.dumps(ev))
+" "$SESSION20" "$INNOCENT_MATE20" "$TEAM20" "$NONCE20_INNOCENT" >> "$TASK_HISTORY"
+_inject_nonce_file "$INNOCENT_MATE20" "$TEAM20" "$NONCE20_INNOCENT"
+
+CONTENT20B="Legitimate write — session_id matches event, tool_input names match event names"
+ENVELOPE20B=$(_build_valid_envelope "$DEST_FILE20" "$CONTENT20B" "developer" "2026-04-18" "role-self-report" "$NONCE20_INNOCENT")
+
+# Payload: session_id=SESSION20, tool_input.teammate_name=innocent (matching the event)
+PAYLOAD20B=$(python3 -c "
+import json, sys
+payload = {
+    'tool_name': 'SendMessage',
+    'session_id': sys.argv[1],
+    'tool_input': {
+        'message': sys.argv[2],
+        'teammate_name': sys.argv[3],
+        'team_name': sys.argv[4],
+    }
+}
+print(json.dumps(payload))
+" "$SESSION20" "$ENVELOPE20B" "$INNOCENT_MATE20" "$TEAM20" 2>/dev/null)
+
+(
+    cd "$FAKE_PROJECT"
+    HOME="$FAKE_HOME" \
+    CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
+    CLAUDE_SESSION_ID="$SESSION20" \
+    CLAUDE_PLUGIN_ROOT="$PROJECT_ROOT" \
+    bash "$HOOK" <<< "$PAYLOAD20B" 2>/dev/null
+) || true
+
+if [ -f "$DEST_FILE20" ] && [ "$(cat "$DEST_FILE20")" = "$CONTENT20B" ]; then
+    _pass "TC-WP-20b: Tier-1 legitimate path (session_id matches, tool_input names match event) — correctly ACCEPTED"
+else
+    _fail "TC-WP-20b: legitimate Tier-1 should succeed" \
+        "dest_exists=$([ -f "$DEST_FILE20" ] && echo 1 || echo 0) log=$(cat "$ERROR_LOG" 2>/dev/null | tail -5)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

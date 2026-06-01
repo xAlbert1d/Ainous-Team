@@ -794,6 +794,11 @@ Rewrite the Compiled Truth section of each modified journal (see journal templat
 
 ### 4b. Enforce Caps
 
+> **Note:** Session cap, playbook cap, learnings dedup/prune, decision rotation, stale-fact flagging,
+> and index integrity are now enforced mechanically by `scripts/memory-maintain.py` (wired into
+> the SessionEnd hook and `scripts/pre-ship-gate.sh`). The prose below remains the canonical
+> description of the logic and the WAL/lock patterns.
+
 **Session array cap (50 entries) — WAL-safe sequence:**
 
 **Archive retention**: `sessions-archive.jsonl` is cold storage for forensic review only. No role reads it during normal operation. It is not injected into any spawn context. Use it to reconstruct session history when debugging score anomalies or auditing trust promotions.

@@ -452,6 +452,15 @@ Built on patterns from:
 | [Anthropic Managed Agents](https://www.anthropic.com/engineering/building-effective-agents) (2026) | Session event log for crash recovery; "harnesses encode assumptions that go stale" |
 | [OEL/ERL](https://arxiv.org/abs/2603.xxxxx) | Strategy source tagging ([from-failure] vs [from-success]); heuristic format enforcement (When X, do Y, because Z) |
 
+## Getting the most out of newer models
+
+The plugin uses family aliases (`opus`/`sonnet`/`haiku`) and works on any Claude Code version and
+any Claude model. Newer models make the team work better automatically — nothing to configure.
+
+If you are on a Claude Code version that supports opt-in features such as `effort:` frontmatter,
+`opusplan`, or `opus[1m]`, see [`docs/NEWER-MODELS.md`](docs/NEWER-MODELS.md) for targeted tweaks
+you can apply role by role. Everything there is optional and reversible.
+
 ## Contributing
 
 Design specs and research notes are in `docs/`. The architecture is documented there for anyone who wants to understand the design decisions.

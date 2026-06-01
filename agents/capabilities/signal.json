@@ -11,9 +11,8 @@
   "anti_keywords": ["implement", "fix bug", "write tests", "document"],
   "max_parallel": 2,
   "topology_phases": ["research"],
-  "default_skills": ["verify", "source-validate", "competitive-intel"],
+  "default_skills": ["verify", "source-validate", "competitive-intel", "confidence-calibration"],
   "conditional_skills": [
-    {"skill": "deep-research", "when": "scan mode is deep or targeted topic requires depth"},
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+    {"skill": "deep-research", "when": "scan mode is deep or targeted topic requires depth"}
   ]
 }

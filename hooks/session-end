@@ -145,4 +145,34 @@ PYEOF
 
 ) 2>>"${HOME}/.claude/ainous-team-telemetry.log" || true
 
+# ---------------------------------------------------------------------------
+# P0 — Mechanical memory cap enforcement (scripts/memory-maintain.py)
+# Runs after skill aggregation. FAIL-OPEN: must never block session end.
+# Mirrors the growth.json aggregation block's error handling above.
+# ---------------------------------------------------------------------------
+(
+    _MM_DEBUG_LOG="${HOME}/.claude/ainous-team-telemetry.log"
+    _MM_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+
+    if ! command -v python3 &>/dev/null; then
+        printf '[%s] session-end memory-maintain: python3 not found — skipping\n' \
+            "$_MM_TS" >> "$_MM_DEBUG_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    _MM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-}/scripts/memory-maintain.py"
+    if [ ! -f "$_MM_SCRIPT" ]; then
+        printf '[%s] session-end memory-maintain: script not found at %s — skipping\n' \
+            "$_MM_TS" "$_MM_SCRIPT" >> "$_MM_DEBUG_LOG" 2>/dev/null || true
+        exit 0
+    fi
+
+    python3 "$_MM_SCRIPT" \
+        ${CLAUDE_PROJECT_DIR:+--project-root "$CLAUDE_PROJECT_DIR"} \
+        >> "$_MM_DEBUG_LOG" 2>&1 || \
+        printf '[%s] session-end memory-maintain: exited non-zero (non-fatal)\n' \
+            "$_MM_TS" >> "$_MM_DEBUG_LOG" 2>/dev/null || true
+
+) 2>>"${HOME}/.claude/ainous-team-telemetry.log" || true
+
 exit 0

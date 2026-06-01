@@ -3,6 +3,7 @@
   "version": "1.1",
   "preferred_spawn_mode": "agent",
   "model": "opus",
+  "model_rationale": "Security must use the strongest available model: it is the only role with override authority over architect, and a weaker model could miss threat vectors or produce superficial audit findings that pass review but leave exploitable gaps.",
   "description": "Scans for vulnerabilities, threat models, reviews auth and data handling",
   "task_types": ["security-review", "threat-modeling", "vulnerability-scan", "auth-review", "compliance"],
   "input_artifacts": ["implementation", "architect-design.md"],
@@ -11,8 +12,6 @@
   "anti_keywords": ["implement feature", "write docs"],
   "max_parallel": 1,
   "topology_phases": ["review", "implement"],
-  "default_skills": ["security-scan", "verify", "threat-model", "compliance-check"],
-  "conditional_skills": [
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
-  ]
+  "default_skills": ["security-scan", "verify", "threat-model", "compliance-check", "confidence-calibration"],
+  "conditional_skills": []
 }

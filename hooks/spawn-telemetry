@@ -43,7 +43,7 @@ _ERROR_LOG="${HOME}/.claude/.spawn-telemetry-errors.log"
     fi
 
     python3 - "$INPUT" "$TASK_HISTORY" << 'PYEOF'
-import sys, json, os, secrets, hashlib
+import sys, json, os, re, secrets, hashlib
 from datetime import datetime, timezone
 
 raw_input  = sys.argv[1]
@@ -108,23 +108,58 @@ else:
 # so teammates can Read it at startup (mirrors taint-nonce pattern from session-start).
 # Skip for agent-mode spawns (no team_name → no nonce file needed).
 # Fail-warn only: a missing nonce file is an optimization loss, not a correctness failure.
+#
+# S-1 (security patch): validate team_name and teammate_name BEFORE any path construction
+# to prevent path traversal. Reject values containing '/', '..', NUL, or a leading '~';
+# require match against ^[A-Za-z0-9._:()-]+$. After constructing nonce_file, assert
+# os.path.realpath(nonce_file) is inside os.path.realpath(~/.claude/teams). On any
+# validation failure, skip the nonce write and exit 0 (fail-open — this is telemetry).
+_SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9._:()\-]+$')
+
+def _is_safe_path_component(value):
+    """Return True iff value is safe to interpolate into a filesystem path.
+    Rejects: empty string, contains '/', '..', NUL byte, or leading '~'.
+    Requires: matches ^[A-Za-z0-9._:()-]+$
+    """
+    if not value:
+        return False
+    if '\x00' in value:
+        return False
+    if value.startswith('~'):
+        return False
+    if '/' in value or '..' in value:
+        return False
+    return bool(_SAFE_NAME_RE.match(value))
+
 if write_proxy_nonce and team_name and teammate_name:
-    try:
-        import stat
-        nonce_dir = os.path.expanduser(f"~/.claude/teams/{team_name}/nonces")
-        os.makedirs(nonce_dir, mode=0o700, exist_ok=True)
-        # Enforce dir mode in case makedirs reused an existing dir with looser perms
-        os.chmod(nonce_dir, stat.S_IRWXU)
-        nonce_file = os.path.join(nonce_dir, f"{teammate_name}.nonce")
-        # Write with mode 0600 via umask-equivalent: open with O_CREAT|O_WRONLY|O_TRUNC
-        fd = os.open(nonce_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    # S-1: validate before any path construction
+    if not _is_safe_path_component(team_name):
+        _log(f"S-1 path-traversal guard: rejected unsafe team_name={team_name!r} — skipping nonce write (fail-open)")
+    elif not _is_safe_path_component(teammate_name):
+        _log(f"S-1 path-traversal guard: rejected unsafe teammate_name={teammate_name!r} — skipping nonce write (fail-open)")
+    else:
         try:
-            os.write(fd, write_proxy_nonce.encode("utf-8"))
-        finally:
-            os.close(fd)
-        _log(f"nonce file written: {nonce_file}")
-    except Exception as exc:
-        _log(f"nonce file write failed (non-fatal): team={team_name} teammate={teammate_name} — {exc}")
+            import stat
+            _teams_root = os.path.realpath(os.path.expanduser("~/.claude/teams"))
+            nonce_dir = os.path.expanduser(f"~/.claude/teams/{team_name}/nonces")
+            os.makedirs(nonce_dir, mode=0o700, exist_ok=True)
+            # Enforce dir mode in case makedirs reused an existing dir with looser perms
+            os.chmod(nonce_dir, stat.S_IRWXU)
+            nonce_file = os.path.join(nonce_dir, f"{teammate_name}.nonce")
+            # S-1: realpath containment assertion — resolves symlinks before comparison
+            _nonce_file_real = os.path.realpath(nonce_file)
+            if not _nonce_file_real.startswith(_teams_root + os.sep) and _nonce_file_real != _teams_root:
+                _log(f"S-1 path-traversal guard: nonce_file {_nonce_file_real!r} escapes teams root {_teams_root!r} — skipping nonce write (fail-open)")
+            else:
+                # Write with mode 0600 via umask-equivalent: open with O_CREAT|O_WRONLY|O_TRUNC
+                fd = os.open(nonce_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+                try:
+                    os.write(fd, write_proxy_nonce.encode("utf-8"))
+                finally:
+                    os.close(fd)
+                _log(f"nonce file written: {nonce_file}")
+        except Exception as exc:
+            _log(f"nonce file write failed (non-fatal): team={team_name} teammate={teammate_name} — {exc}")
 
 # v5.9.0 (Option A): Taint propagation across Agent boundary (ClawGuard defense).
 # If the parent session is tainted (has a non-empty taint-flag file), propagate

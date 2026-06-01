@@ -48,7 +48,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|Bash|Read",
+        "matcher": "Edit|Write|Bash|Read|WebFetch|WebSearch",
         "hooks": [
           {
             "type": "command",

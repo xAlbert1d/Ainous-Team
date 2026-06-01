@@ -11,8 +11,6 @@
   "anti_keywords": ["implement", "design", "document"],
   "max_parallel": 2,
   "topology_phases": ["review"],
-  "default_skills": ["verify", "refactor", "code-review-ext"],
-  "conditional_skills": [
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
-  ]
+  "default_skills": ["verify", "refactor", "code-review-ext", "confidence-calibration"],
+  "conditional_skills": []
 }
