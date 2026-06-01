@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 57 skills, that learn and improve over time. v5.8.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.8.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -104,8 +104,9 @@ The coordinator has Write/Bash for journal writes but delegates all implementati
 ainous-team plugin
 |-- 12 agents        -- coordinator, developer, architect, code-quality, tester,
 |                       researcher, writer, security, authority, consolidator, retriever, signal
-|-- 57 skills        -- 3 orchestration + 54 domain-expertise (see Skills Vault below)
-|-- 5 commands       -- /team-status, /team-history, /team-alerts, /team-retro, /team-signal
+|-- 54 skills        -- domain-expertise (see Skills Vault below)
+|-- 8 commands       -- /team-status, /team-history, /team-alerts, /team-retro, /team-signal,
+|                       /team-review, /team-review-periodic, /team-implement
 |-- 2 hooks          -- SessionStart (context injection), PreToolUse (enforcement)
 |-- enforcement      -- script-based Write/Edit/Bash gating (fail-closed, allowlist-based)
 \-- runtime charter  -- shared execution semantics injected into every role spawn
@@ -134,7 +135,7 @@ The team implements patterns from recent harness engineering research:
 | **Exploration force** | [Meta-Harness](https://yoonholee.com/meta-harness/) | Consolidator injects `[experimental]` strategies with maturity-decaying rate |
 | **Soft enforcement** | Original | Main session gets NOTE when writing directly in coordinator-as-default mode |
 | **Failure taxonomy** | NLAH + Anthropic | 7 named failure modes with prescribed recovery actions |
-| **Skills vault** | Original + gstack + community | 57 skills across 10 domains, assigned at spawn, invoked autonomously by roles |
+| **Skills vault** | Original + gstack + community | 54 skills across 10 domains, assigned at spawn, invoked autonomously by roles |
 | **Session event log** | Anthropic Managed Agents | 7 event types in task-history.jsonl; enables crash recovery |
 | **Knowledge lint** | Karpathy LLM Wiki | Consolidator detects contradictions and orphans across knowledge stores |
 | **Structured retrieval tags** | MemPalace | Journal entries tagged by task-type and area; retriever pre-filters |
@@ -184,17 +185,11 @@ Topologies compose phases: `full-pipeline: [research, design, implement, test, r
 
 ### Skills Vault
 
-57 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
+54 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
 
-**Orchestration skills (3):**
+The three pipeline-orchestration commands (`/team-implement`, `/team-review`, `/team-review-periodic`) were commands all along and now live in `commands/`.
 
-| Skill | Description |
-|-------|-------------|
-| **team-implement** | End-to-end feature pipeline: research, design, code, test, review |
-| **team-review** | Multi-angle review pipeline: security + quality + architecture |
-| **team-review-periodic** | Periodic team health review: 1-on-1s, dynamics retro, coordinator self-assessment |
-
-**Domain-expertise skills (48):**
+**Domain-expertise skills (54):**
 
 | Category | Skills |
 |----------|--------|
