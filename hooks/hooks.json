@@ -97,7 +97,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/write-proxy\"",
-            "timeout": 3000,
+            "timeout": 30,
             "async": false
           }
         ]

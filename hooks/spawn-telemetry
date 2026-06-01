@@ -42,12 +42,43 @@ _ERROR_LOG="${HOME}/.claude/.spawn-telemetry-errors.log"
         exit 0
     fi
 
-    python3 - "$INPUT" "$TASK_HISTORY" << 'PYEOF'
+    # R-3b: write $INPUT to a 0600 tempfile to avoid ARG_MAX limit on large prompts.
+    # Mirrors the write-proxy tempfile pattern. Trap ensures cleanup on any exit.
+    _INPUT_TMP=$(python3 -c "import tempfile,os,sys; fd,p=tempfile.mkstemp(); os.chmod(p,0o600); os.write(fd,sys.stdin.buffer.read()); os.close(fd); print(p)" <<< "$INPUT" 2>/dev/null || echo "")
+    if [ -z "$_INPUT_TMP" ]; then
+        printf '[%s] spawn-telemetry: tempfile creation failed — skipping\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
+        exit 0
+    fi
+    trap 'rm -f "$_INPUT_TMP" 2>/dev/null || true' EXIT
+
+    python3 - "$_INPUT_TMP" "$TASK_HISTORY" << 'PYEOF'
 import sys, json, os, re, secrets, hashlib
 from datetime import datetime, timezone
 
-raw_input  = sys.argv[1]
+input_path = sys.argv[1]
 hist_path  = sys.argv[2]
+
+# Read and unlink the tempfile — fail-open: if read fails, skip
+raw_input = None
+try:
+    with open(input_path, encoding="utf-8") as _tf:
+        raw_input = _tf.read()
+    try:
+        os.unlink(input_path)
+    except OSError:
+        pass  # Unlink failure is non-fatal — trap cleans up on exit
+except OSError as exc:
+    _err_log = os.path.expanduser("~/.claude/.spawn-telemetry-errors.log")
+    _ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(_err_log, "a", encoding="utf-8") as _f:
+            _f.write(f"[{_ts}] spawn-telemetry: tempfile read failed: {exc} — skipping\n")
+    except OSError:
+        pass
+    sys.exit(0)
+
+if raw_input is None:
+    sys.exit(0)
 
 error_log = os.path.expanduser("~/.claude/.spawn-telemetry-errors.log")
 

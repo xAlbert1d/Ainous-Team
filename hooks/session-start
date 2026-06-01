@@ -112,53 +112,65 @@ fi
 # GC sweep: delete taint-flag files and nonce files older than 7 days
 # Fail-warn on any sweep error (non-blocking)
 {
+    # Q-14: single python3 process sweeps both directories (O(1) interpreter startups).
+    # Replaces two per-file python3 invocations (O(n) startups). Behavior identical:
+    # delete *.jsonl in taint-flags dir and *.nonce in nonce dir older than 7 days.
+    # Fail-open on any OSError.
+    python3 - "$_TAINT_FLAGS_DIR" "$_TAINT_NONCE_DIR" "$_TAINT_ERROR_LOG" << 'GC_SWEEP_EOF' 2>/dev/null || true
+import os, sys, time, glob
+
+taint_flags_dir = sys.argv[1]
+nonce_dir       = sys.argv[2]
+error_log       = sys.argv[3]
+cutoff          = time.time() - 7 * 86400
+
+def _log_sweep_err(msg):
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(error_log, "a") as _f:
+            _f.write(f"[{ts}] session-start: {msg}\n")
+    except OSError:
+        pass
+
+# Sweep taint-flags directory (*.jsonl)
+if os.path.isdir(taint_flags_dir):
+    for path in glob.glob(os.path.join(taint_flags_dir, "*.jsonl")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError as exc:
+            _log_sweep_err(f"sweep failed for {path}: {exc}")
+
+# Sweep nonce directory (*.nonce)
+if os.path.isdir(nonce_dir):
+    for path in glob.glob(os.path.join(nonce_dir, "*.nonce")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError as exc:
+            _log_sweep_err(f"nonce sweep failed for {path}: {exc}")
+GC_SWEEP_EOF
+    # v5.8.1 (Item 3): Sweep .authority-tainted-decisions.log if older than 7 days.
+    # This file records adversary-influenced command hashes — bounded retention prevents
+    # accumulation of cross-session forensic data that could be read via smuggling.
     _SEVEN_DAYS_AGO=$(python3 -c "import time; print(int(time.time()) - 7*86400)" 2>/dev/null || echo "")
-    if [ -n "$_SEVEN_DAYS_AGO" ]; then
-        # Sweep taint-flags directory
-        if [ -d "$_TAINT_FLAGS_DIR" ]; then
-            for _tf in "$_TAINT_FLAGS_DIR"/*.jsonl; do
-                [ -f "$_tf" ] || continue
-                _mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
-                    "$_tf" 2>/dev/null || echo "0")
-                if [ -n "$_mtime" ] && [ "$_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
-                    rm -f "$_tf" 2>/dev/null || \
-                        printf '[%s] session-start: sweep failed for %s\n' \
-                            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_tf" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
-                fi
-            done
+    _AUDIT_DECISIONS_LOG="${HOME}/.claude/.authority-tainted-decisions.log"
+    if [ -f "$_AUDIT_DECISIONS_LOG" ] && [ -n "$_SEVEN_DAYS_AGO" ]; then
+        _log_mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
+            "$_AUDIT_DECISIONS_LOG" 2>/dev/null || echo "0")
+        if [ -n "$_log_mtime" ] && [ "$_log_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
+            rm -f "$_AUDIT_DECISIONS_LOG" 2>/dev/null || \
+                printf '[%s] session-start: audit-log sweep failed for %s\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_AUDIT_DECISIONS_LOG" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
         fi
-        # Sweep nonce directory
-        if [ -d "$_TAINT_NONCE_DIR" ]; then
-            for _nf in "$_TAINT_NONCE_DIR"/*.nonce; do
-                [ -f "$_nf" ] || continue
-                _mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
-                    "$_nf" 2>/dev/null || echo "0")
-                if [ -n "$_mtime" ] && [ "$_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
-                    rm -f "$_nf" 2>/dev/null || \
-                        printf '[%s] session-start: nonce sweep failed for %s\n' \
-                            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_nf" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
-                fi
-            done
-        fi
-        # v5.8.1 (Item 3): Sweep .authority-tainted-decisions.log if older than 7 days.
-        # This file records adversary-influenced command hashes — bounded retention prevents
-        # accumulation of cross-session forensic data that could be read via smuggling.
-        _AUDIT_DECISIONS_LOG="${HOME}/.claude/.authority-tainted-decisions.log"
-        if [ -f "$_AUDIT_DECISIONS_LOG" ]; then
-            _log_mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" \
-                "$_AUDIT_DECISIONS_LOG" 2>/dev/null || echo "0")
-            if [ -n "$_log_mtime" ] && [ "$_log_mtime" -lt "$_SEVEN_DAYS_AGO" ]; then
-                rm -f "$_AUDIT_DECISIONS_LOG" 2>/dev/null || \
-                    printf '[%s] session-start: audit-log sweep failed for %s\n' \
-                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_AUDIT_DECISIONS_LOG" >> "$_TAINT_ERROR_LOG" 2>/dev/null || true
-            fi
-        fi
-        # v5.9.1 (Item 3): Size-based log rotation — atomic with fcntl.flock + os.rename.
-        # Replaces v5.8.2 non-atomic truncate-then-write (race between concurrent session-starts).
-        # Pattern: lock → read tail → write to .tmp → os.rename (atomic on POSIX) → release lock.
-        # If LOCK_NB fails (another process is rotating), skip — not fatal for this session.
-        if [ -f "$_AUDIT_DECISIONS_LOG" ]; then
-            python3 << 'SIZE_GC_EOF' 2>>"$_TAINT_ERROR_LOG" || true
+    fi
+    # v5.9.1 (Item 3): Size-based log rotation — atomic with fcntl.flock + os.rename.
+    # Replaces v5.8.2 non-atomic truncate-then-write (race between concurrent session-starts).
+    # Pattern: lock → read tail → write to .tmp → os.rename (atomic on POSIX) → release lock.
+    # If LOCK_NB fails (another process is rotating), skip — not fatal for this session.
+    if [ -f "$_AUDIT_DECISIONS_LOG" ]; then
+        python3 << 'SIZE_GC_EOF' 2>>"$_TAINT_ERROR_LOG" || true
 import os, sys, fcntl, tempfile
 from datetime import datetime, timezone
 
@@ -226,7 +238,6 @@ try:
 except Exception:
     sys.exit(1)
 SIZE_GC_EOF
-        fi
     fi
 } 2>>"$_TAINT_ERROR_LOG" || true
 

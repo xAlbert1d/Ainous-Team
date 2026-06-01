@@ -38,7 +38,7 @@ fi
     fi
 
     python3 - "$TASK_HISTORY" "$GROWTH_DIR" "$SESSION_ID" << 'PYEOF'
-import sys, json, os
+import sys, json, os, fcntl
 from datetime import datetime, timezone
 
 hist_path   = sys.argv[1]
@@ -105,40 +105,60 @@ _log(f"aggregating {matched} events across {len(skills_by_role)} role(s)")
 # Append to growth.json sessions[].skills_invoked for each role
 for role, skills in skills_by_role.items():
     growth_path = os.path.join(growth_dir, role, "growth.json")
+    # Q-7: flock(LOCK_EX) prevents race with parallel panes and memory-maintain.
+    # Pattern: open file, acquire exclusive blocking lock, read, modify, write, close
+    # (closing releases the lock). Fail-open: any lock or I/O error skips this role.
     try:
-        with open(growth_path, encoding="utf-8") as f:
-            growth = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        _log(f"cannot load growth.json for role '{role}': {exc} — skipping")
+        lock_fd = open(growth_path, "r+", encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        _log(f"cannot open growth.json for role '{role}': {exc} — skipping")
         continue
-
-    sessions = growth.get("sessions", [])
-    if not sessions:
-        _log(f"role '{role}' has no sessions[] in growth.json — skipping (consolidator will read task-history.jsonl)")
-        continue
-
-    # Find latest session entry; prefer one matching today
-    latest = None
-    for entry in reversed(sessions):
-        if isinstance(entry, dict):
-            latest = entry
-            break
-    if latest is None:
-        _log(f"role '{role}': no dict entry in sessions[] — skipping")
-        continue
-
-    # Merge skills (preserve any existing self-reported skills)
-    existing = set(latest.get("skills_invoked", []) or [])
-    merged = sorted(existing | skills)
-    latest["skills_invoked"] = merged
 
     try:
-        with open(growth_path, "w", encoding="utf-8") as f:
-            json.dump(growth, f, indent=2)
-            f.write("\n")
-        _log(f"role '{role}': wrote skills_invoked={merged}")
-    except OSError as exc:
-        _log(f"cannot write growth.json for role '{role}': {exc}")
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            _log(f"flock failed for role '{role}' growth.json: {exc} — skipping (fail-open)")
+            continue  # finally closes lock_fd
+
+        try:
+            lock_fd.seek(0)
+            growth = json.load(lock_fd)
+        except (json.JSONDecodeError, OSError) as exc:
+            _log(f"cannot read growth.json for role '{role}': {exc} — skipping")
+            continue  # finally closes lock_fd
+
+        sessions = growth.get("sessions", [])
+        if not sessions:
+            _log(f"role '{role}' has no sessions[] in growth.json — skipping (consolidator will read task-history.jsonl)")
+            continue  # finally closes lock_fd
+
+        # Find latest session entry; prefer one matching today
+        latest = None
+        for entry in reversed(sessions):
+            if isinstance(entry, dict):
+                latest = entry
+                break
+        if latest is None:
+            _log(f"role '{role}': no dict entry in sessions[] — skipping")
+            continue  # finally closes lock_fd
+
+        # Merge skills (preserve any existing self-reported skills)
+        existing = set(latest.get("skills_invoked", []) or [])
+        merged = sorted(existing | skills)
+        latest["skills_invoked"] = merged
+
+        try:
+            lock_fd.seek(0)
+            lock_fd.truncate()
+            json.dump(growth, lock_fd, indent=2)
+            lock_fd.write("\n")
+            lock_fd.flush()
+            _log(f"role '{role}': wrote skills_invoked={merged}")
+        except OSError as exc:
+            _log(f"cannot write growth.json for role '{role}': {exc}")
+    finally:
+        lock_fd.close()  # releases flock on close
 
 sys.exit(0)
 PYEOF

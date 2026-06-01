@@ -163,8 +163,7 @@ print('FRONTMATTER:' + json.dumps(req_frontmatter))
 PYEOF
 }
 
-manifest_output="$(_parse_manifest)"
-if [[ $? -ne 0 ]]; then
+if ! manifest_output="$(_parse_manifest)"; then
   _fail "failed to parse manifest for ${ARTIFACT_NAME}"
 fi
 
