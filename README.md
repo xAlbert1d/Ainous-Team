@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.10.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.11.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -343,6 +343,10 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.11.0
+
+A set of instruction-design refinements that let the team take fuller advantage of capable, large-context models (Opus 4.8 and later) without weakening behavior on older Claude Code versions or smaller-context / lower-tier models. Every change degrades gracefully — better when the model is strong, still correct when it is not. The context-degradation ladder (`runtime-charter.md`) is preserved in full but now triggers on an explicit coordinator signal or observed tool/error pressure rather than a role's self-estimated context fill, so large-context sessions stay at peak exploration while small-context roles keep the guardrails. Spawn verbosity defaults are now tier-conditional — `coaching` for haiku-tier or unknown-tier roles, `supporting` for sonnet/opus-tier — instead of a blanket default, so weaker models keep step-by-step scaffolding and capable models get less noise. Keyword-based routing remains the baseline mechanism (the keyword arrays are untouched), with an additive semantic-override escape hatch the coordinator may use for ambiguous or stale matches, recorded in the routing-decision event. The consolidator's journal compaction retains the last 15 raw entries (up from 5) for richer pattern detection — consolidator read-depth only, not per-spawn context — and its strategy-absorption retirement check now runs every cycle for Shu-maturity strategies and records the model identifier at retirement, making retirements version-traceable so archived strategies can be selectively reinstated if a weaker model is later adopted. Anti-conformity injection for parallel reviewers is unchanged — it becomes more reliable on stronger models, not less.
 
 ## What's new in v5.10.0
 
