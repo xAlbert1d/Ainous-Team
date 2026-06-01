@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.11.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.12.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -343,6 +343,10 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.12.0
+
+A correctness, hardening, and backlog-clearing release driven by a post-release adversarial audit of v5.11.0's own code. The headline fix: `verify_index_integrity` in `scripts/memory-maintain.py` was silently destroying valid knowledge-index entries on every session end — it removed an entire line when any single link on it was broken, and resolved relative links against the wrong base directory. It now removes only the broken link substring, resolves links against the index file's own directory, and refuses to write an index that would shrink by more than 30% (fail-safe). The script's advisory lock, previously held by only one of six mutating functions, now covers all of them; all-malformed JSONL files are detected rather than silently reported as clean; and the changelog/docstring no longer overclaim the playbook cap as mechanically enforced (it is report-only — retirement remains consolidator judgment). This release also adds a **trust-level audit**: `authority-enforce.sh` reads `trust.level` from `growth.json` as its fail-closed authorization input, but that value was previously set only by consolidator prose. `memory-maintain.py` now mechanically clamps any `trust.level` that exceeds what a role's own session history justifies (fail-safe — it only ever lowers trust, never raises it, and never clamps on uncertain data), gated as a new pre-ship check (Gate 4); the `growth.json` trust subtree is added to the provenance-gated surfaces as defense-in-depth. Finally, several long-standing backlog items are closed: the write-proxy hook timeout was 3000 seconds (50 minutes) and is now 30; a dead `$?` check let malformed artifact manifests pass validation; the `spawn.json` event schema (which declared fields the hook never emits) was aligned to reality; the `growth.json` read-modify-write in the session-end hook is now flock-protected against parallel-pane races; the session-start GC sweep no longer launches one Python interpreter per file; and `spawn-telemetry` passes its payload via a tempfile rather than argv (avoiding an ARG_MAX failure on large prompts).
 
 ## What's new in v5.11.0
 
