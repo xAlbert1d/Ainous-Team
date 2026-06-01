@@ -167,14 +167,23 @@ Code installs and runs it cleanly on any Claude model. Newer/better models (4.8+
 - Add a model-absorption retirement test to the consolidator.
 - KEEP anti-conformity injection (gets more reliable on Opus 4.8).
 
-**P2 — bloat & dead weight (~2,350 lines, ~15%)**
-- Cut: video-script, video-edit, caption-format.
-- Move team-review/team-review-periodic/team-implement to `commands/`.
-- Extract `app/pm-client/` out of the package.
-- Delete `templates/knowledge-index.md`, `scripts/layer2-effectiveness-audit.sh`. (Note:
+**P2 — bloat & dead weight — DONE**
+- ✅ Cut: video-script, video-edit, caption-format.
+- ✅ Converted team-review/team-review-periodic/team-implement to `commands/` (command-orchestration
+  docs, not role skills; updated team-retro.md + README + design-doc counts → 54 skills).
+- ✅ Extracted `app/pm-client/` to `ainous-team/pm-client/`; removed dead operator `app/` baseline.
+- ✅ Deleted `templates/knowledge-index.md`, `scripts/layer2-effectiveness-audit.sh`. (Note:
   `scripts/migrate-legacy-provenance.sh` was initially flagged dead but is kept — live test dep.)
-- Move `confidence-calibration` from conditional (`when: always`) to `default_skills`.
-- Consolidate ~593 lines of duplicated instruction boilerplate into runtime-charter references.
+- ✅ Moved `confidence-calibration` to `default_skills` (10 roles).
+- ⚠️ Instruction boilerplate: consolidated the Startup Sequence to a runtime-charter §5 pointer
+  (−31 net lines, 9 files). Deliberately LEFT the Stop-hook frontmatter (harness-coupled), team-mode
+  paragraphs (role-specific artifact names), and conformity guard (not byte-identical) inline — those
+  would be lossy. ~550 lines deferred as not-safely-mergeable.
+
+**Accepted residual (security)**
+- R-nonce-clobber (MEDIUM, accepted): `spawn-telemetry` O_TRUNC overwrites a nonce on re-spawn —
+  required for crash-recovery; only a self-defeating DoS for an already-trusted spawner. Documented in
+  `spawn-telemetry` + CLAUDE-DESIGN.md §Residuals.
 
 **Security fixes (from bug audit) — DONE + verified**
 - ✅ S-1: `spawn-telemetry` path components now charset-validated + realpath-contained (fail-open).

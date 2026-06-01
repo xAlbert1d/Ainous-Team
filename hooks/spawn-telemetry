@@ -151,6 +151,15 @@ if write_proxy_nonce and team_name and teammate_name:
             if not _nonce_file_real.startswith(_teams_root + os.sep) and _nonce_file_real != _teams_root:
                 _log(f"S-1 path-traversal guard: nonce_file {_nonce_file_real!r} escapes teams root {_teams_root!r} — skipping nonce write (fail-open)")
             else:
+                # RESIDUAL-RISK (R-nonce-clobber, MEDIUM, accepted v5.9.5): O_TRUNC means a
+                # re-spawn of the same (team_name, teammate_name) OVERWRITES the existing nonce.
+                # This is REQUIRED for legitimate crash-recovery re-spawn (latest session must own
+                # the matching HMAC key) — O_EXCL here would silently break recovered teammates by
+                # leaving them with a stale nonce. The only adversarial use is self-defeating DoS:
+                # overwriting requires an already-Agent-capable (full-trust spawn) context, grants
+                # no new path/surface/identity over spawning a fresh teammate, and only invalidates
+                # a victim's in-flight write-proxy envelopes (HMAC mismatch, logged). The act emits a
+                # spawn event + write-proxy error lines, so it is forensically visible. Accepted, not fixed.
                 # Write with mode 0600 via umask-equivalent: open with O_CREAT|O_WRONLY|O_TRUNC
                 fd = os.open(nonce_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
                 try:
