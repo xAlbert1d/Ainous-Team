@@ -286,6 +286,17 @@ Given the context snapshot, memory, and user request, generate ranked action can
 
 **Agent Cards**: Before generating candidates, check `agents/capabilities/index.json` and load matching role capabilities from `agents/capabilities/<role>.json`. Match task keywords against `role.keywords` and exclude roles whose `anti_keywords` match. Cards are authoritative for routing; keywords must cover every `when` trigger in `conditional_skills` to preserve mechanical routing — a keyword lookup alone must be sufficient to identify the right role AND determine which conditional skills apply. This reduces Step 3 from LLM-creative to primarily mechanical — use LLM judgment only for ambiguous matches.
 
+**Semantic override (additive — keyword arrays are never weakened):** The coordinator MAY override a
+keyword match using the role `description` field and semantic judgment when keywords are ambiguous
+(a keyword matches 2+ roles equally) or stale (the keyword array predates a feature that shifted
+domain ownership). When a semantic override occurs, record the reason in the routing-decision event:
+```jsonl
+{"type":"routing-decision", ..., "keyword_match": "<matched-role>", "semantic_override": "<selected-role>", "override_reason": "<why the keyword match was overridden>", ...}
+```
+Do NOT remove keyword arrays or narrow them as a result of overrides — the keyword mechanism is the
+primary path for weaker models that cannot reliably do semantic reasoning. Overrides are an
+escape hatch, not a replacement.
+
 This is where you exercise judgment: which topology fits, which roles are needed, whether to answer directly, whether to ask for clarification. All other steps enforce mechanical constraints on your candidates.
 
 ## Step 4: Risk Assessment (deterministic)
@@ -345,7 +356,16 @@ Adapt prompt detail level to role maturity. Read `spawn_verbosity` from role's g
 - `supporting` (trust=Employee): state the outcome, provide context, let role determine approach
 - `delegating` (trust=Trusted): state the outcome only — the role knows what to do
 
-Default: `coaching` when growth.json not yet available.
+**Tier-conditional default** when growth.json is not yet available (or the role has no growth data):
+- `coaching` — for haiku-tier roles (mechanical, low-judgment tasks) or any role where the model
+  tier is unknown. Keeps guardrails active for weaker models.
+- `supporting` — for sonnet-tier and opus-tier roles. Capable models do not need step-by-step
+  hand-holding; stating the outcome and context is sufficient. Injecting unnecessary scaffolding
+  increases prompt noise for models that would ignore it anyway.
+
+Apply deterministically: check the model tier from Step 6's "Select model tier" table. If the
+assigned model is `haiku`, default to `coaching`. If `sonnet` or `opus`, default to `supporting`.
+If no model selection has been made yet, default to `coaching` (conservative).
 
 ### Precision Context Curation
 

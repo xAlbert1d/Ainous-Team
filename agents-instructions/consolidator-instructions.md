@@ -450,9 +450,16 @@ Write updates to temporary sections or working notes first. Verify correctness b
 - Convert relative times ("yesterday", "last session") to absolute dates
 - Discard facts negated by subsequent evidence (git preserves history)
 - Update structured facts in team-knowledge with provenance
-- **Journal compaction**: keep the last 5 raw entries intact (recent context). Older entries get compacted to a single line:
+- **Journal compaction**: keep the last 15 raw entries intact (recent context). Older entries get compacted to a single line:
   `## <date> — <task> (score: N) — <key insight> [trace: traces/<date>-<slug>.md]`
   The `[trace: ...]` lineage link allows tracing a compacted entry back to the raw execution trace that produced it. Git preserves the full journal originals. This prevents journals from growing unboundedly while maintaining debuggability.
+
+  **Threshold rationale:** 15 raw entries provides richer recent signal for the consolidator's
+  cross-session pattern detection (emergent strategies, regression watch) without materially
+  increasing per-spawn context — the role journal is read by the consolidator, not injected into
+  every role spawn. If journal size becomes a concern on a small-context session (200K), the
+  consolidator may locally reduce this threshold to 10 for that run and note it in the
+  consolidator journal — the cap mechanism itself is unchanged.
 - If a role has >20 unconsolidated entries, this is an overflow — process them all but flag in the consolidator journal as "emergency compaction"
 - Deduplicate memory.md entries; keep most recent when contradicted
 
@@ -514,7 +521,7 @@ Read growth.json for strategy-to-score correlations:
 Playbook strategies carry a `maturity` field: `shu | ha | ri`.
 - **Shu** (follow exactly): new strategy, unproven — default for all new strategies
 - **Ha** (adapt the principle): 3+ successful applications across independent sessions — promote from Shu
-- **Ri** (transcend): consolidator staleness check passes at 10+ sessions: "Would the current model do this naturally without this instruction?" If yes → retire to `# Retired Strategies (Ri Archive)` section — keep for provenance, remove from active injection
+- **Ri** (transcend): consolidator staleness check passes. Ask: "Would the current model do this naturally without this instruction?" If yes → retire to `# Retired Strategies (Ri Archive)` section — keep for provenance, remove from active injection. When retiring for absorption, record the model identifier/version in the retirement reason (e.g., `"absorbed by: claude-sonnet-4-5 / claude-opus-4, 2026-05-01"`). This makes retirement decisions version-traceable — if a future weaker model is adopted, archived strategies can be selectively reinstated.
 
 **Safety-critical rules never graduate past Shu** regardless of session count.
 
@@ -541,11 +548,22 @@ This prevents false retirements where a strategy was coincidentally present duri
 
 #### Assumption Staleness Check
 
-Strategies encode assumptions about what the model can't do alone. Periodically check if strategies are still needed:
+Strategies encode assumptions about what the model can't do alone. Check whether strategies are still needed:
 
-1. For each strategy older than 10 sessions, ask: "Would the current model do this naturally without being told?"
-2. If a strategy codifies basic behavior the model already exhibits (e.g., "read files before editing" for a frontier model), tag it `[potentially-stale]`
-3. After 3 more sessions, check if the behavior occurs even without the strategy being listed — if yes, retire with reason "model capability has absorbed this"
+1. **For all `shu`-maturity strategies** (on EVERY consolidation cycle, not only at 10+ sessions):
+   ask "Would the current model do this naturally without being told?" This is adaptive by
+   construction — it always asks about whatever model is currently running, making it automatically
+   version-agnostic.
+2. For `ha`-maturity and higher, apply this check only at 10+ sessions (the original threshold).
+3. If a strategy codifies basic behavior the model already exhibits (e.g., "read files before
+   editing" for a frontier model), tag it `[potentially-stale]`.
+4. After 3 more sessions, check if the behavior occurs even without the strategy being listed —
+   if yes, retire with reason `"model capability has absorbed this — model: <identifier/version>,
+   date: <ISO-date>"`. Recording the model identifier at retirement enables selective reinstatement
+   if the team later switches to a weaker model.
+5. This is judgment guidance for the consolidator — there is no mechanical enforcement. The
+   consolidator must exercise honest assessment of the current model's behavior, not rubber-stamp
+   retirements.
 
 ### Aggressive Pruning (from organizational forgetting research)
 

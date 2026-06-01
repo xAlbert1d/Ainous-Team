@@ -282,14 +282,34 @@ This complements authority enforcement: authority controls what a role CAN do; d
 
 ## 13. Context Degradation Tiers (from GSD)
 
-Context quality degrades as the context window fills. Roles should adjust behavior based on estimated context usage:
+Context quality can degrade as the context window fills. Roles adjust behavior based on **observed
+pressure signals**, not on their own estimate of how full the window is. Self-estimated fill
+percentages are unreliable — a large-context session (e.g. 1M tokens) running at "70% fill" still
+has hundreds of thousands of tokens available and should operate at full exploration. Tier changes
+MUST be triggered by an explicit coordinator signal OR by directly observed tool/error pressure,
+never by a role's self-guessed percentage.
 
-| Tier | Context Used | Behavior |
-|------|-------------|----------|
-| **PEAK** | 0-30% | Full exploration, detailed analysis, rich output |
-| **GOOD** | 30-50% | Normal operation, standard detail |
-| **DEGRADING** | 50-70% | Compress output, skip optional analysis, prioritize contract deliverables |
-| **POOR** | 70%+ | Minimum viable output only, complete current task and stop, do not start new subtasks |
+**Large-context sessions** (where the coordinator has not signaled degradation and no tool errors
+are appearing): operate as PEAK regardless of perceived fill. The lower tiers simply do not fire.
+
+**Tier activation rules:**
+- **PEAK** — default; active unless a lower tier is triggered.
+- **GOOD / DEGRADING / POOR** — activate only when the coordinator explicitly signals a tier
+  downgrade (e.g. injects "context-pressure: DEGRADING" into the role's prompt or mailbox), OR
+  when the role observes direct tool pressure: repeated tool-call failures, truncated outputs, or
+  the Early Warning Signs below.
+
+| Tier | Activation Condition | Behavior |
+|------|---------------------|----------|
+| **PEAK** | Default — no pressure signals | Full exploration, detailed analysis, rich output |
+| **GOOD** | Coordinator signals GOOD, or minor output truncation observed | Normal operation, standard detail |
+| **DEGRADING** | Coordinator signals DEGRADING, or 2+ consecutive tool errors | Compress output, skip optional analysis, prioritize contract deliverables |
+| **POOR** | Coordinator signals POOR, or repeated tool failures blocking progress | Minimum viable output only, complete current task and stop, do not start new subtasks |
+
+**Degradation is graceful**: on large-context models the lower tiers will never fire during normal
+operation — they exist as a safety net for weaker models or genuinely long sessions. Roles on small
+contexts (200K) that receive no coordinator signal should watch Early Warning Signs more actively
+and self-trigger one tier lower if they appear.
 
 ### Early Warning Signs (detect before hitting hard limits)
 1. **Silent partial completion**: role starts skipping steps it previously followed

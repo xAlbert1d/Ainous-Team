@@ -159,13 +159,17 @@ Code installs and runs it cleanly on any Claude model. Newer/better models (4.8+
 - Verify each against the installed CC version before recommending; ship nothing that an older CC
   would choke on.
 
-**P1/P2 — stop scaffolding a frontier model on a 1M window**
-- Collapse PEAK/GOOD/POOR context-degradation ladder (runtime-charter.md:270-284).
-- Reframe "Orient-First/never read everything"; bump journal compaction 5→15.
-- Default spawn verbosity `coaching`→`supporting` for sonnet/opus roles.
-- Loosen keyword-routing; let role `description` carry semantic weight.
-- Add a model-absorption retirement test to the consolidator.
-- KEEP anti-conformity injection (gets more reliable on Opus 4.8).
+**P1/P2 — adapt to capable models WITHOUT breaking weaker ones — DONE (v5.11.0)**
+Reframed from the original "stop scaffolding" wording to honor the model/version-agnostic principle:
+every change degrades gracefully (better on Opus 4.8 / 1M, still correct on a weaker / small-context model).
+- ✅ Context-degradation ladder KEPT; now fires on explicit coordinator signal / observed pressure, not
+  self-estimated fill (no-op at low fill → 1M sessions stay PEAK; small-context still protected).
+- ✅ Journal compaction 5→15 (consolidator read-depth; small-context may locally drop to 10).
+- ✅ Spawn verbosity default made TIER-CONDITIONAL (`coaching` for haiku/unknown, `supporting` for
+  sonnet/opus) — not a blanket change.
+- ✅ Keyword routing KEPT as baseline; semantic override ADDED (logged), arrays never weakened.
+- ✅ Model-absorption retirement test strengthened; records model version at retirement (version-traceable).
+- ✅ Anti-conformity injection left unchanged (more reliable on Opus 4.8).
 
 **P2 — bloat & dead weight — DONE**
 - ✅ Cut: video-script, video-edit, caption-format.
