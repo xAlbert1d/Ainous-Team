@@ -913,10 +913,10 @@ JUNIOR_BASELINES = {
     # Developer TODO #3: operator has no journal/memory directories — skip own_paths
     # generation for operator to prevent phantom allow (see own_paths block below).
     "operator": [
-        ".claude/", "src/", "lib/", "app/", "scripts/", "hooks/", "agents/",
+        ".claude/", "src/", "lib/", "scripts/", "hooks/", "agents/",
         "agents-instructions/", "skills/", "tests/", "docs/", "templates/",
         "README", "readme",
-    ],  # v5.9.4 M-new-3: "app/" added for PM client scaffold at app/pm-client/
+    ],  # v5.9.4 M-new-3: "app/" entry removed — pm-client moved to ainous-team/pm-client/ outside plugin package
 }
 
 # Senior: expanded baselines (adjacent areas)
