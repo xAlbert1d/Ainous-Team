@@ -52,6 +52,29 @@ LEARNING_MIN_CONFIDENCE = 0.3  # Prune entries below this if not corroborated
 DECISION_EXPIRY_DAYS = 90      # Rotate decisions older than this
 STALE_FACT_DAYS = 180          # Flag facts older than this
 
+# INDEX_SHRINK_MAX_FRACTION: refuse to write an index that would shrink by more than
+# this fraction of original line count (fail-safe guard against wiping valid data).
+INDEX_SHRINK_MAX_FRACTION = 0.30
+
+# Trust level thresholds — derived from templates/authority-book.md.
+# Level names match growth.json trust.level values (lowercase).
+# Promotion gates require BOTH a minimum trust.score AND minimum sessions_completed
+# AND zero violations in last 5 sessions (violations_detected checked globally here).
+TRUST_LEVEL_ORDER = ["intern", "junior", "senior", "principal"]
+TRUST_SCORE_FLOORS = {
+    "intern":    0,
+    "junior":   50,
+    "senior":   75,
+    "principal": 90,
+}
+# Minimum sessions_completed required to hold each level
+TRUST_SESSION_FLOORS = {
+    "intern":    0,
+    "junior":    3,
+    "senior":    8,
+    "principal": 15,
+}
+
 # GROWTH_DIR is the canonical base for all role directories.
 # main() may override this via --growth-dir for testing; every function that
 # reads from this path does so at call time (not at import time), so overriding
@@ -72,10 +95,11 @@ def _log(msg: str, verbose: bool = False, always: bool = False) -> None:
         print(f"[{_ts()}] memory-maintain: {msg}")
 
 
-def _acquire_advisory_lock(lock_path: pathlib.Path, max_age_seconds: int = 60) -> bool:
+def _acquire_advisory_lock(lock_path: pathlib.Path, max_age_seconds: int = 60) -> "tuple[bool, int]":
     """Acquire a file-based advisory lock.  Removes stale locks older than
-    max_age_seconds.  Returns True if the lock was acquired, False otherwise.
-    Uses fcntl.flock for atomic acquisition on POSIX systems.
+    max_age_seconds.  Returns (acquired: bool, fd: int).  fd is -1 when not
+    acquired.  Uses fcntl.flock for atomic acquisition on POSIX systems.
+    Caller must pass fd to _release_advisory_lock when done.
     """
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,14 +243,16 @@ def enforce_session_cap(role: str, dry_run: bool = False, verbose: bool = False)
 
 
 def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False) -> bool:
-    """Enforce the PLAYBOOK_CAP (30 strategies) on playbook.md.
+    """Check (report only) whether playbook.md exceeds PLAYBOOK_CAP (30 strategies).
 
     Strategy detection: count H3 headings (### ) as strategy entries.
-    If >30, the lowest-scoring strategies should be retired.  Since score
-    data lives in the playbook itself (not machine-readable in a consistent
-    format), this function REPORTS the violation and logs it, but does not
-    auto-retire (that requires consolidator judgment).  Returns False if cap
-    exceeded so --check mode reports it.
+    This function REPORTS violations and logs them but does NOT auto-retire any
+    strategy — retirement requires consolidator judgment about which entries have
+    the lowest utility scores.  Returns False if cap exceeded so --check mode
+    reports it.
+
+    The consolidator must retire lowest-scoring strategies manually when this
+    check fires.
     """
     playbook_path = GROWTH_DIR / role / "playbook.md"
     if not playbook_path.exists():
@@ -247,8 +273,9 @@ def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False
         return True
 
     excess = count - PLAYBOOK_CAP
+    # Report only — do NOT auto-retire (retirement is consolidator judgment).
     _log(f"enforce_playbook_cap({role}): {count} strategies exceeds cap {PLAYBOOK_CAP} "
-         f"({excess} over limit) — consolidator must retire lowest-scoring entries",
+         f"({excess} over limit) — playbook over cap; consolidator must retire lowest-scoring entries",
          always=True)
     if dry_run:
         _log(f"[dry-run] would flag playbook cap violation for role={role}", always=True)
@@ -261,52 +288,84 @@ def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False
 
 
 def dedup_learnings(role: str, dry_run: bool = False, verbose: bool = False) -> bool:
-    """Deduplicate learnings.jsonl by (key, type) — keep only the latest entry.
+    """Deduplicate learnings.jsonl by (key, type) — keep highest-confidence entry.
+
+    When two entries share the same (key, type), the one with the higher
+    'confidence' value is kept.  If confidence values are equal (or absent),
+    recency (last-written) wins.  This preference for confidence is a deliberate
+    choice: a corroborated high-confidence entry is more valuable than a recent
+    low-confidence one.
 
     Lifted from consolidator-instructions.md §Learnings Pruning.
-    Uses WAL-safe write.
+    Uses WAL-safe write under advisory lock.
     """
     learnings_path = GROWTH_DIR / role / "learnings.jsonl"
     if not learnings_path.exists():
         _log(f"dedup_learnings({role}): learnings.jsonl not found — skipping", verbose)
         return True
 
+    lock_path = GROWTH_DIR / role / "learnings-dedup.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log(f"dedup_learnings({role}): could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than abort
+
     try:
-        raw = learnings_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _log(f"dedup_learnings({role}): cannot read learnings.jsonl: {exc}", always=True)
-        return False
-
-    entries = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
         try:
-            entries.append(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            _log(f"dedup_learnings({role}): skipping malformed line", verbose)
+            raw = learnings_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"dedup_learnings({role}): cannot read learnings.jsonl: {exc}", always=True)
+            return False
 
-    # Keep last entry for each (key, type) pair
-    seen: dict[tuple, dict] = {}
-    for entry in entries:
-        k = (entry.get("key", ""), entry.get("type", ""))
-        seen[k] = entry  # Last write wins
+        entries = []
+        non_empty_lines = 0
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            non_empty_lines += 1
+            try:
+                entries.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                _log(f"dedup_learnings({role}): skipping malformed line", verbose)
 
-    deduped = list(seen.values())
-    removed = len(entries) - len(deduped)
+        # N-3: if there were non-empty lines but none parsed, signal corruption
+        if non_empty_lines > 0 and len(entries) == 0:
+            _log(f"dedup_learnings({role}): all {non_empty_lines} non-empty line(s) failed to parse "
+                 f"— file may be corrupt; skipping to avoid data loss", always=True)
+            return False
 
-    if removed == 0:
-        _log(f"dedup_learnings({role}): no duplicates found", verbose)
-        return True
+        # Keep highest-confidence entry for each (key, type) pair.
+        # Prefer confidence over recency; when confidence is equal, last-write wins
+        # (last seen in the file wins because we iterate in order).
+        seen: dict[tuple, dict] = {}
+        for entry in entries:
+            k = (entry.get("key", ""), entry.get("type", ""))
+            if k not in seen:
+                seen[k] = entry
+            else:
+                existing_conf = seen[k].get("confidence", 0.0) or 0.0
+                new_conf = entry.get("confidence", 0.0) or 0.0
+                if new_conf >= existing_conf:
+                    # Equal confidence → last-write wins; higher → always replace
+                    seen[k] = entry
 
-    _log(f"dedup_learnings({role}): removing {removed} duplicate(s)", always=True)
-    if dry_run:
-        _log(f"[dry-run] would dedup {removed} learnings entries for role={role}", always=True)
-        return False
+        deduped = list(seen.values())
+        removed = len(entries) - len(deduped)
 
-    content = "\n".join(json.dumps(e) for e in deduped) + "\n"
-    return _wal_write(learnings_path, content)
+        if removed == 0:
+            _log(f"dedup_learnings({role}): no duplicates found", verbose)
+            return True
+
+        _log(f"dedup_learnings({role}): removing {removed} duplicate(s)", always=True)
+        if dry_run:
+            _log(f"[dry-run] would dedup {removed} learnings entries for role={role}", always=True)
+            return False
+
+        content = "\n".join(json.dumps(e) for e in deduped) + "\n"
+        return _wal_write(learnings_path, content)
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -321,56 +380,72 @@ def prune_orphan_learnings(role: str, dry_run: bool = False, verbose: bool = Fal
     none of them exist on disk.  Entries with an empty 'files' array are kept.
 
     Lifted from consolidator-instructions.md §Learnings Pruning.
-    Uses WAL-safe write.
+    Uses WAL-safe write under advisory lock.
     """
     learnings_path = GROWTH_DIR / role / "learnings.jsonl"
     if not learnings_path.exists():
         _log(f"prune_orphan_learnings({role}): learnings.jsonl not found — skipping", verbose)
         return True
 
+    lock_path = GROWTH_DIR / role / "learnings-prune.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log(f"prune_orphan_learnings({role}): could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than abort
+
     try:
-        raw = learnings_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _log(f"prune_orphan_learnings({role}): cannot read learnings.jsonl: {exc}", always=True)
-        return False
-
-    entries = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
         try:
-            entries.append(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            entries_raw = getattr(entries, '_raw', [])
-            _log(f"prune_orphan_learnings({role}): skipping malformed line", verbose)
-            continue
-
-    def _is_orphan(entry: dict) -> bool:
-        files = entry.get("files", [])
-        if not files:
-            return False  # No file refs — keep
-        # Orphan iff ALL referenced files are non-empty paths and ALL are missing
-        non_empty = [f for f in files if f and isinstance(f, str)]
-        if not non_empty:
+            raw = learnings_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"prune_orphan_learnings({role}): cannot read learnings.jsonl: {exc}", always=True)
             return False
-        return all(not pathlib.Path(f).exists() and not pathlib.Path(os.path.expanduser(f)).exists()
-                   for f in non_empty)
 
-    kept = [e for e in entries if not _is_orphan(e)]
-    pruned = len(entries) - len(kept)
+        entries = []
+        non_empty_lines = 0
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            non_empty_lines += 1
+            try:
+                entries.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                _log(f"prune_orphan_learnings({role}): skipping malformed line", verbose)
+                continue
 
-    if pruned == 0:
-        _log(f"prune_orphan_learnings({role}): no orphaned entries", verbose)
-        return True
+        # N-3: if there were non-empty lines but none parsed, signal corruption
+        if non_empty_lines > 0 and len(entries) == 0:
+            _log(f"prune_orphan_learnings({role}): all {non_empty_lines} non-empty line(s) failed to parse "
+                 f"— file may be corrupt; skipping to avoid data loss", always=True)
+            return False
 
-    _log(f"prune_orphan_learnings({role}): pruning {pruned} orphaned entry(ies)", always=True)
-    if dry_run:
-        _log(f"[dry-run] would prune {pruned} orphaned learnings for role={role}", always=True)
-        return False
+        def _is_orphan(entry: dict) -> bool:
+            files = entry.get("files", [])
+            if not files:
+                return False  # No file refs — keep
+            # Orphan iff ALL referenced files are non-empty paths and ALL are missing
+            non_empty = [f for f in files if f and isinstance(f, str)]
+            if not non_empty:
+                return False
+            return all(not pathlib.Path(f).exists() and not pathlib.Path(os.path.expanduser(f)).exists()
+                       for f in non_empty)
 
-    content = "\n".join(json.dumps(e) for e in kept) + "\n"
-    return _wal_write(learnings_path, content)
+        kept = [e for e in entries if not _is_orphan(e)]
+        pruned = len(entries) - len(kept)
+
+        if pruned == 0:
+            _log(f"prune_orphan_learnings({role}): no orphaned entries", verbose)
+            return True
+
+        _log(f"prune_orphan_learnings({role}): pruning {pruned} orphaned entry(ies)", always=True)
+        if dry_run:
+            _log(f"[dry-run] would prune {pruned} orphaned learnings for role={role}", always=True)
+            return False
+
+        content = "\n".join(json.dumps(e) for e in kept) + "\n"
+        return _wal_write(learnings_path, content)
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -392,74 +467,83 @@ def rotate_expired_decisions(dry_run: bool = False, verbose: bool = False) -> bo
         _log("rotate_expired_decisions: decisions.md not found — skipping", verbose)
         return True
 
+    lock_path = GROWTH_DIR / "authority" / "decisions-rotate.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log("rotate_expired_decisions: could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than abort
+
     try:
-        text = decisions_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _log(f"rotate_expired_decisions: cannot read decisions.md: {exc}", always=True)
-        return False
+        try:
+            text = decisions_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"rotate_expired_decisions: cannot read decisions.md: {exc}", always=True)
+            return False
 
-    today = _date.today()
-    # Split on decision blocks — each starts with "- **role:**"
-    # Use a simple line-by-line parser to group decision blocks.
-    blocks: list[list[str]] = []
-    current: list[str] = []
-    preamble: list[str] = []
-    in_decisions = False
+        today = _date.today()
+        # Split on decision blocks — each starts with "- **role:**"
+        # Use a simple line-by-line parser to group decision blocks.
+        blocks: list[list[str]] = []
+        current: list[str] = []
+        preamble: list[str] = []
+        in_decisions = False
 
-    for line in text.splitlines(keepends=True):
-        if not in_decisions and line.strip().startswith("- **role:**"):
-            in_decisions = True
-        if not in_decisions:
-            preamble.append(line)
-        elif line.strip().startswith("- **role:**") and current:
+        for line in text.splitlines(keepends=True):
+            if not in_decisions and line.strip().startswith("- **role:**"):
+                in_decisions = True
+            if not in_decisions:
+                preamble.append(line)
+            elif line.strip().startswith("- **role:**") and current:
+                blocks.append(current)
+                current = [line]
+            else:
+                current.append(line)
+        if current:
             blocks.append(current)
-            current = [line]
-        else:
-            current.append(line)
-    if current:
-        blocks.append(current)
 
-    active_blocks: list[list[str]] = []
-    expired_blocks: list[list[str]] = []
-    expires_re = re.compile(r'-\s+\*\*expires:\*\*\s+(\d{4}-\d{2}-\d{2})')
+        active_blocks: list[list[str]] = []
+        expired_blocks: list[list[str]] = []
+        expires_re = re.compile(r'-\s+\*\*expires:\*\*\s+(\d{4}-\d{2}-\d{2})')
 
-    for block in blocks:
-        block_text = "".join(block)
-        m = expires_re.search(block_text)
-        if m:
-            try:
-                exp_date = _date.fromisoformat(m.group(1))
-                if exp_date < today:
-                    expired_blocks.append(block)
-                    continue
-            except ValueError:
-                pass
-        active_blocks.append(block)
+        for block in blocks:
+            block_text = "".join(block)
+            m = expires_re.search(block_text)
+            if m:
+                try:
+                    exp_date = _date.fromisoformat(m.group(1))
+                    if exp_date < today:
+                        expired_blocks.append(block)
+                        continue
+                except ValueError:
+                    pass
+            active_blocks.append(block)
 
-    if not expired_blocks:
-        _log("rotate_expired_decisions: no expired decisions found", verbose)
-        return True
+        if not expired_blocks:
+            _log("rotate_expired_decisions: no expired decisions found", verbose)
+            return True
 
-    _log(f"rotate_expired_decisions: rotating {len(expired_blocks)} expired decision(s)", always=True)
-    if dry_run:
-        _log(f"[dry-run] would rotate {len(expired_blocks)} expired decisions", always=True)
-        return False
+        _log(f"rotate_expired_decisions: rotating {len(expired_blocks)} expired decision(s)", always=True)
+        if dry_run:
+            _log(f"[dry-run] would rotate {len(expired_blocks)} expired decisions", always=True)
+            return False
 
-    # Append expired blocks to archive
-    archive_path = GROWTH_DIR / "authority" / "decisions-archive.md"
-    try:
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        with archive_path.open("a", encoding="utf-8") as af:
-            af.write(f"\n<!-- rotated by memory-maintain.py at {_ts()} -->\n")
-            for block in expired_blocks:
-                af.write("".join(block))
-    except OSError as exc:
-        _log(f"rotate_expired_decisions: archive append failed: {exc}", always=True)
-        return False
+        # Append expired blocks to archive
+        archive_path = GROWTH_DIR / "authority" / "decisions-archive.md"
+        try:
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive_path.open("a", encoding="utf-8") as af:
+                af.write(f"\n<!-- rotated by memory-maintain.py at {_ts()} -->\n")
+                for block in expired_blocks:
+                    af.write("".join(block))
+        except OSError as exc:
+            _log(f"rotate_expired_decisions: archive append failed: {exc}", always=True)
+            return False
 
-    # Write updated decisions.md via WAL
-    new_content = "".join(preamble) + "".join("".join(b) for b in active_blocks)
-    return _wal_write(decisions_path, new_content)
+        # Write updated decisions.md via WAL
+        new_content = "".join(preamble) + "".join("".join(b) for b in active_blocks)
+        return _wal_write(decisions_path, new_content)
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -476,50 +560,60 @@ def flag_stale_facts(dry_run: bool = False, verbose: bool = False) -> bool:
     humans and the consolidator can review them.
 
     This is a non-destructive annotation — no facts are removed.
+    Uses advisory lock for the read→WAL-write cycle.
     """
     tk_path = GROWTH_DIR / "team-knowledge.md"
     if not tk_path.exists():
         _log("flag_stale_facts: team-knowledge.md not found — skipping", verbose)
         return True
 
+    lock_path = GROWTH_DIR / "team-knowledge-stale.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log("flag_stale_facts: could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than abort
+
     try:
-        text = tk_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _log(f"flag_stale_facts: cannot read team-knowledge.md: {exc}", always=True)
-        return False
+        try:
+            text = tk_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"flag_stale_facts: cannot read team-knowledge.md: {exc}", always=True)
+            return False
 
-    today = _date.today()
-    disc_re = re.compile(r'<!--\s*discovered:\s*(\d{4}-\d{2}-\d{2})\s*-->')
-    stale_marker_re = re.compile(r'<!--\s*STALE:[^>]*-->')
+        today = _date.today()
+        disc_re = re.compile(r'<!--\s*discovered:\s*(\d{4}-\d{2}-\d{2})\s*-->')
+        stale_marker_re = re.compile(r'<!--\s*STALE:[^>]*-->')
 
-    lines = text.splitlines(keepends=True)
-    new_lines: list[str] = []
-    flagged = 0
+        lines = text.splitlines(keepends=True)
+        new_lines: list[str] = []
+        flagged = 0
 
-    for line in lines:
-        m = disc_re.search(line)
-        if m:
-            try:
-                disc_date = _date.fromisoformat(m.group(1))
-                age_days = (today - disc_date).days
-                already_flagged = bool(stale_marker_re.search(line))
-                if age_days >= STALE_FACT_DAYS and not already_flagged:
-                    line = line.rstrip("\n") + f"  <!-- STALE: last-seen {m.group(1)} -->\n"
-                    flagged += 1
-            except ValueError:
-                pass
-        new_lines.append(line)
+        for line in lines:
+            m = disc_re.search(line)
+            if m:
+                try:
+                    disc_date = _date.fromisoformat(m.group(1))
+                    age_days = (today - disc_date).days
+                    already_flagged = bool(stale_marker_re.search(line))
+                    if age_days >= STALE_FACT_DAYS and not already_flagged:
+                        line = line.rstrip("\n") + f"  <!-- STALE: last-seen {m.group(1)} -->\n"
+                        flagged += 1
+                except ValueError:
+                    pass
+            new_lines.append(line)
 
-    if flagged == 0:
-        _log("flag_stale_facts: no stale facts detected", verbose)
-        return True
+        if flagged == 0:
+            _log("flag_stale_facts: no stale facts detected", verbose)
+            return True
 
-    _log(f"flag_stale_facts: flagging {flagged} stale fact(s)", always=True)
-    if dry_run:
-        _log(f"[dry-run] would flag {flagged} stale facts", always=True)
-        return False
+        _log(f"flag_stale_facts: flagging {flagged} stale fact(s)", always=True)
+        if dry_run:
+            _log(f"[dry-run] would flag {flagged} stale facts", always=True)
+            return False
 
-    return _wal_write(tk_path, "".join(new_lines))
+        return _wal_write(tk_path, "".join(new_lines))
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -532,8 +626,18 @@ def verify_index_integrity(project_root: Optional[str] = None,
                            verbose: bool = False) -> bool:
     """Verify that all entries in team-sync/index.md point to existing files.
 
-    Broken entries are reported.  If not in dry_run mode, broken entries are
-    removed from the index and the index is rewritten via WAL.
+    Broken entries are reported.  If not in dry_run mode, broken link substrings
+    are removed from their lines (preserving valid co-located links on the same
+    line).  The index is rewritten via WAL under an advisory lock.
+
+    Relative paths are resolved against the index file's own directory
+    (index_path.parent), not project_root — this correctly handles links like
+    .claude/ainous-roles/team-sync/artifacts/foo.md that are relative to the
+    index file's directory.
+
+    Fail-safe guard: refuses to write an index that would shrink by more than
+    INDEX_SHRINK_MAX_FRACTION (30%) of the original line count, unless every
+    surviving line was validated clean.  Logs and skips instead of over-deleting.
 
     Lifted from consolidator-instructions.md §4e.
     """
@@ -547,49 +651,255 @@ def verify_index_integrity(project_root: Optional[str] = None,
         _log("verify_index_integrity: index.md not found — skipping", verbose)
         return True
 
+    # Resolve base directory for relative links: index file's own directory
+    index_dir = index_path.parent
+
+    lock_path = index_path.parent / "index-integrity.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log("verify_index_integrity: could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than abort
+
     try:
-        text = index_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _log(f"verify_index_integrity: cannot read index.md: {exc}", always=True)
-        return False
+        try:
+            text = index_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"verify_index_integrity: cannot read index.md: {exc}", always=True)
+            return False
 
-    # Match markdown links: [label](path) — extract path
-    link_re = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
-    broken: list[tuple[str, str]] = []  # (label, path)
-    all_links: list[tuple[str, str]] = link_re.findall(text)
+        # Match markdown links: [label](path) — extract path
+        link_re = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+        broken_paths: set[str] = set()
+        all_links: list[tuple[str, str]] = link_re.findall(text)
 
-    for label, path in all_links:
-        # Paths may be relative (to project root) or absolute
-        if path.startswith("/") or path.startswith("~"):
-            check = pathlib.Path(os.path.expanduser(path))
-        elif project_root:
-            check = pathlib.Path(project_root) / path
-        else:
-            check = pathlib.Path.cwd() / path
-        if not check.exists():
-            broken.append((label, path))
-            _log(f"verify_index_integrity: broken link [{label}]({path})", verbose, always=True)
+        for label, path in all_links:
+            # Paths may be absolute, ~-relative, or relative to the index file's dir
+            if path.startswith("/") or path.startswith("~"):
+                check = pathlib.Path(os.path.expanduser(path))
+            else:
+                # M-1(b): resolve relative paths against index_path.parent, not project_root
+                check = index_dir / path
+            if not check.exists():
+                broken_paths.add(path)
+                _log(f"verify_index_integrity: broken link [{label}]({path})", verbose, always=True)
 
-    if not broken:
-        _log(f"verify_index_integrity: all {len(all_links)} index entries are valid", verbose)
+        if not broken_paths:
+            _log(f"verify_index_integrity: all {len(all_links)} index entries are valid", verbose)
+            return True
+
+        _log(f"verify_index_integrity: {len(broken_paths)} broken index path(s) detected", always=True)
+        if dry_run:
+            _log(f"[dry-run] would remove {len(broken_paths)} broken index link(s)", always=True)
+            return False
+
+        # M-1(a): Remove only the broken link substring from each line, preserving
+        # valid co-located links on the same line.
+        original_lines = text.splitlines(keepends=True)
+        new_lines: list[str] = []
+        for line in original_lines:
+            new_line = line
+            for path in broken_paths:
+                # Remove the specific [label](path) substring for this broken path.
+                # We must escape the path in case it contains regex metacharacters.
+                broken_link_re = re.compile(
+                    r'\[[^\]]*\]\(' + re.escape(path) + r'\)',
+                )
+                new_line = broken_link_re.sub("", new_line)
+            # Drop lines that are now empty (only whitespace) after link removal,
+            # unless they were already empty before (preserve intentional blank lines).
+            stripped_original = line.strip()
+            stripped_new = new_line.strip()
+            if stripped_original and not stripped_new:
+                # Line had content but is now empty — it was only the broken link; drop it
+                continue
+            new_lines.append(new_line)
+
+        # Fail-safe: refuse to write if the result shrinks the index by >30%
+        original_count = len(original_lines)
+        new_count = len(new_lines)
+        if original_count > 0:
+            shrink_fraction = (original_count - new_count) / original_count
+            if shrink_fraction > INDEX_SHRINK_MAX_FRACTION:
+                _log(
+                    f"verify_index_integrity: refusing to write — would shrink index by "
+                    f"{shrink_fraction:.0%} ({original_count} → {new_count} lines), "
+                    f"exceeds {INDEX_SHRINK_MAX_FRACTION:.0%} safety threshold. "
+                    f"Re-run with --check to inspect, then fix manually.",
+                    always=True,
+                )
+                return False
+
+        return _wal_write(index_path, "".join(new_lines))
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
+
+
+# ---------------------------------------------------------------------------
+# 8. trust_audit(role)
+# ---------------------------------------------------------------------------
+
+
+def _compute_justified_trust_level(history: dict, sessions_completed: int) -> Optional[str]:
+    """Compute the maximum trust level justified by growth.json history.
+
+    Returns the justified level string ("intern"/"junior"/"senior"/"principal"),
+    or None if data is insufficient to make a determination.
+
+    Trust thresholds (from templates/authority-book.md):
+      - "intern":    score < 50, sessions >= 0  (always achievable; the floor)
+      - "junior":    score >= 50, sessions >= 3
+      - "senior":    score >= 75, sessions >= 8
+      - "principal": score >= 90, sessions >= 15 (requires explicit user approval;
+                     we never clamp to principal — if stored level is principal,
+                     we treat it as a manual grant and leave it alone)
+
+    Score reconstruction from history fields:
+      trust_score = (sessions_completed * 2)
+                  + approvals_granted
+                  - (denials_received * 5)
+                  - (violations_detected * 15)
+                  - (user_overrides * 3)
+      Capped 0-100.
+
+    Insufficient-data conditions (return None):
+      - history dict is None or not a dict
+      - sessions_completed is negative or implausibly large (>10000)
+    """
+    if not isinstance(history, dict):
+        return None
+    if sessions_completed < 0 or sessions_completed > 10000:
+        return None
+
+    approvals = history.get("approvals_granted", 0) or 0
+    denials = history.get("denials_received", 0) or 0
+    violations = history.get("violations_detected", 0) or 0
+    overrides = history.get("user_overrides", 0) or 0
+
+    # Reconstruct score from history
+    raw_score = (sessions_completed * 2) + approvals - (denials * 5) - (violations * 15) - (overrides * 3)
+    reconstructed_score = max(0, min(100, raw_score))
+
+    # Walk levels from highest to lowest, returning the first one that fits
+    # Skip "principal" in the automated audit — principal requires explicit user
+    # approval per authority-book.md and should never be auto-granted or auto-clamped
+    # down by this tool (that would break a legitimately-granted principal).
+    # If stored level is "principal", we leave it alone (see trust_audit logic).
+    for level in reversed(TRUST_LEVEL_ORDER[:-1]):  # intern, junior, senior
+        score_floor = TRUST_SCORE_FLOORS[level]
+        session_floor = TRUST_SESSION_FLOORS[level]
+        if reconstructed_score >= score_floor and sessions_completed >= session_floor:
+            return level
+
+    return "intern"  # Lowest floor always reachable
+
+
+def trust_audit(role: str, dry_run: bool = False, verbose: bool = False) -> bool:
+    """Audit trust.level in growth.json against what the role's history justifies.
+
+    Clamps trust.level DOWN if the stored value exceeds the justified maximum
+    (fail-safe — only demotes, never promotes).  WAL-writes under advisory lock.
+
+    Never raises trust — raising stays consolidator judgment.
+    If history is insufficient to determine justified level, leaves as-is and flags.
+    If stored level is "principal" (requires explicit user approval), leaves as-is
+    because principal is a manual grant that automated audit should not revoke.
+
+    Honors --dry-run/--check (reports, does not mutate).
+    Honors --growth-dir.
+    """
+    growth_path = GROWTH_DIR / role / "growth.json"
+    if not growth_path.exists():
+        _log(f"trust_audit({role}): growth.json not found — skipping", verbose)
         return True
 
-    _log(f"verify_index_integrity: {len(broken)} broken index entry(ies) detected", always=True)
-    if dry_run:
-        _log(f"[dry-run] would remove {len(broken)} broken index entries", always=True)
+    try:
+        growth = json.loads(growth_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        _log(f"trust_audit({role}): cannot read growth.json: {exc}", always=True)
         return False
 
-    # Remove broken-link lines from index
-    broken_paths = {path for _, path in broken}
-    new_lines: list[str] = []
-    for line in text.splitlines(keepends=True):
-        # Check if this line contains any broken link
-        line_links = link_re.findall(line)
-        if any(p in broken_paths for _, p in line_links):
-            continue  # Drop the line
-        new_lines.append(line)
+    trust = growth.get("trust", {})
+    if not isinstance(trust, dict):
+        _log(f"trust_audit({role}): trust field missing or malformed — skipping", always=True)
+        return True
 
-    return _wal_write(index_path, "".join(new_lines))
+    stored_level = trust.get("level", "intern")
+    if stored_level not in TRUST_LEVEL_ORDER:
+        _log(f"trust_audit({role}): unknown stored trust level {stored_level!r} — skipping", always=True)
+        return True
+
+    # "principal" is a manually-granted level; do not auto-clamp it
+    if stored_level == "principal":
+        _log(f"trust_audit({role}): stored level is 'principal' (manual grant) — skipping auto-audit", verbose)
+        return True
+
+    history = trust.get("history", {})
+    sessions_completed = history.get("sessions_completed", 0) or 0
+
+    justified = _compute_justified_trust_level(history, sessions_completed)
+
+    if justified is None:
+        _log(
+            f"trust_audit({role}): insufficient history data to determine justified level "
+            f"(sessions_completed={sessions_completed}) — leaving as-is and flagging",
+            always=True,
+        )
+        return True  # Leave as-is on uncertainty (fail-safe: don't clamp without evidence)
+
+    stored_idx = TRUST_LEVEL_ORDER.index(stored_level)
+    justified_idx = TRUST_LEVEL_ORDER.index(justified)
+
+    if stored_idx <= justified_idx:
+        # Stored level is at or below justified — no clamping needed
+        _log(
+            f"trust_audit({role}): stored level '{stored_level}' is within justified max "
+            f"'{justified}' — OK",
+            verbose,
+        )
+        return True
+
+    # Stored level EXCEEDS justified maximum — clamp down (fail-safe)
+    _log(
+        f"trust_audit({role}): CLAMPING trust level '{stored_level}' → '{justified}' "
+        f"(history justifies max '{justified}': sessions={sessions_completed}, "
+        f"reconstructed score justifies '{justified}')",
+        always=True,
+    )
+
+    if dry_run:
+        _log(
+            f"[dry-run] would clamp trust.level from '{stored_level}' to '{justified}' for role={role}",
+            always=True,
+        )
+        return False  # Signal: action needed
+
+    lock_path = GROWTH_DIR / role / "trust-audit.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log(f"trust_audit({role}): could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than silently leave wrong value
+
+    try:
+        # Re-read under lock to avoid TOCTOU
+        try:
+            growth = json.loads(growth_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            _log(f"trust_audit({role}): re-read under lock failed: {exc}", always=True)
+            return False
+
+        trust = growth.get("trust", {})
+        if not isinstance(trust, dict):
+            return True
+        trust["level"] = justified
+        growth["trust"] = trust
+
+        content = json.dumps(growth, indent=2) + "\n"
+        ok = _wal_write(growth_path, content)
+        if ok:
+            _log(f"trust_audit({role}): trust.level clamped to '{justified}' and written", always=True)
+        return ok
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +981,9 @@ def main() -> int:
             all_ok = all_ok and ok
 
             ok = prune_orphan_learnings(role, dry_run=dry_run, verbose=verbose)
+            all_ok = all_ok and ok
+
+            ok = trust_audit(role, dry_run=dry_run, verbose=verbose)
             all_ok = all_ok and ok
 
     # Global operations — always run regardless of whether any role dirs exist.

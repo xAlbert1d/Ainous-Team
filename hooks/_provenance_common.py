@@ -59,6 +59,15 @@ _PROVENANCE_PATTERNS = [
     # Phase 2 (v5.3.0): taint-flags surface — defense-in-depth behind TAINT_FLAG_WRITE_DENY.
     # If the primary deny-list is ever relaxed, provenance validation still applies.
     (r'\.claude/ainous-roles/team-sync/state/taint-flags/[^/]+\.jsonl$', 'jsonl'),
+    # Trust subtree (v5.11.0): growth.json is gated here as defense-in-depth against
+    # tool-surface trust escalation.  All LEGITIMATE writers (session-end hook,
+    # memory-maintain.py, consolidator Python snippets, coordinator sed-template) use
+    # DIRECT FILE I/O — they never go through the tool surface — so this pattern does NOT
+    # break any normal workflow.  A tool-surface Write/Edit to growth.json (which is the
+    # only path the provenance validator intercepts) is anomalous and should require a
+    # provenance block.  If any legitimate writer ever moves to the tool surface, remove
+    # this entry and document why in a comment here (follow-up item).
+    (r'\.claude/ainous-roles/[^/]+/growth\.json$', 'jsonl'),
 ]
 
 # Required provenance fields (security §7 field set — v1).

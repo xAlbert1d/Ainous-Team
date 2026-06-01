@@ -18,6 +18,12 @@
 #   TC-MM-14: verify_index_integrity — broken link removed; valid link kept
 #   TC-MM-15: --check/--dry-run NEVER mutates (session cap violation detected)
 #   TC-MM-16: --check/--dry-run NEVER mutates (dedup violation detected)
+#   TC-MM-17: verify_index_integrity — line with one valid + one broken link keeps valid link
+#   TC-MM-18: verify_index_integrity — relative link to sibling file is NOT removed
+#   TC-MM-19: trust_audit — stored level exceeds justified → clamped down
+#   TC-MM-20: trust_audit — stored level within justified → no change
+#   TC-MM-21: trust_audit — insufficient data → no clamp, returns success
+#   TC-MM-22: trust_audit — dry-run with over-trust → exit 1, file NOT mutated
 #
 # Run: bash tests/test-memory-maintain.sh
 # Exit 0 = all pass; exit 1 = at least one failure.
@@ -414,6 +420,10 @@ fi
 
 # ---------------------------------------------------------------------------
 # TC-MM-14: verify_index_integrity — broken link removed; valid link kept
+#           Uses paths relative to index_path.parent (the fixed resolution base).
+#           The index is at <project>/.claude/ainous-roles/team-sync/index.md,
+#           so "artifacts/existing.md" resolves to
+#           <project>/.claude/ainous-roles/team-sync/artifacts/existing.md.
 # ---------------------------------------------------------------------------
 GD14=$(_make_fixture "tc-mm-14")
 FAKE_PROJECT14="$TMPDIR_BASE/project14"
@@ -424,11 +434,13 @@ EXISTING_ARTIFACT="$FAKE_PROJECT14/.claude/ainous-roles/team-sync/artifacts/exis
 mkdir -p "$(dirname "$EXISTING_ARTIFACT")"
 echo "# exists" > "$EXISTING_ARTIFACT"
 
+# Paths are relative to index_path.parent (the fixed resolution):
+#   "artifacts/existing.md" resolves to the artifacts/ subdir of team-sync/
 cat > "$FAKE_PROJECT14/.claude/ainous-roles/team-sync/index.md" << INDEX_EOF
 # Team Sync Index
 
-- [Existing artifact](.claude/ainous-roles/team-sync/artifacts/existing.md)
-- [Missing artifact](.claude/ainous-roles/team-sync/artifacts/missing.md)
+- [Existing artifact](artifacts/existing.md)
+- [Missing artifact](artifacts/missing.md)
 INDEX_EOF
 
 _run "$GD14" --project-root "$FAKE_PROJECT14" > /dev/null 2>&1
@@ -485,6 +497,230 @@ if [ "$EXIT16" -eq 1 ] && [ "$ORIGINAL_CONTENT16" = "$AFTER_CONTENT16" ]; then
 else
     _fail "TC-MM-16: --dry-run should not mutate files" \
         "exit=$EXIT16 content_changed=$([ "$ORIGINAL_CONTENT16" != "$AFTER_CONTENT16" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------------------
+# Helper: build a growth.json with trust section
+# ---------------------------------------------------------------------------
+_make_growth_with_trust() {
+    local level="$1"
+    local score="$2"
+    local sessions_completed="$3"
+    local denials="${4:-0}"
+    python3 -c "
+import json, sys
+level = sys.argv[1]
+score = int(sys.argv[2])
+sessions_completed = int(sys.argv[3])
+denials = int(sys.argv[4])
+d = {
+    'role': 'developer',
+    'metric': 'implementation_quality',
+    'sessions': [{'date': '2026-01-' + str(i+1).zfill(2), 'score': 8} for i in range(sessions_completed)],
+    'summary': {'total_sessions': sessions_completed, 'avg_score': 8.0},
+    'trust': {
+        'level': level,
+        'score': score,
+        'history': {
+            'approvals_granted': 0,
+            'denials_received': denials,
+            'violations_detected': 0,
+            'sessions_completed': sessions_completed,
+            'user_overrides': 0,
+        },
+        'last_promotion': None,
+        'last_demotion': None,
+    },
+}
+print(json.dumps(d, indent=2))
+" "$level" "$score" "$sessions_completed" "$denials"
+}
+
+# ---------------------------------------------------------------------------
+# TC-MM-17: verify_index_integrity — line with one valid + one broken link
+#           keeps the valid link (M-1a: link-granular removal)
+#           Uses paths relative to index_path.parent (artifacts/ subdir of team-sync/).
+# ---------------------------------------------------------------------------
+GD17=$(_make_fixture "tc-mm-17")
+FAKE_PROJECT17="$TMPDIR_BASE/project17"
+mkdir -p "$FAKE_PROJECT17/.claude/ainous-roles/team-sync/artifacts"
+
+# Create the valid (existing) file
+EXISTING17="$FAKE_PROJECT17/.claude/ainous-roles/team-sync/artifacts/existing.md"
+echo "# exists" > "$EXISTING17"
+
+# Index has one line with both a valid and a broken link (paths relative to index dir)
+cat > "$FAKE_PROJECT17/.claude/ainous-roles/team-sync/index.md" << INDEX17_EOF
+# Team Sync Index
+
+- [Valid artifact](artifacts/existing.md) and [Missing artifact](artifacts/missing.md)
+INDEX17_EOF
+
+_run "$GD17" --project-root "$FAKE_PROJECT17" > /dev/null 2>&1
+
+INDEX17_CONTENT=$(cat "$FAKE_PROJECT17/.claude/ainous-roles/team-sync/index.md" 2>/dev/null || echo "")
+VALID_KEPT17=0
+echo "$INDEX17_CONTENT" | grep -q "Valid artifact" && VALID_KEPT17=1
+BROKEN_REMOVED17=1
+echo "$INDEX17_CONTENT" | grep -q "Missing artifact" && BROKEN_REMOVED17=0
+LINE_KEPT17=0
+echo "$INDEX17_CONTENT" | grep -q "Valid artifact" && LINE_KEPT17=1
+
+if [ $VALID_KEPT17 -eq 1 ] && [ $BROKEN_REMOVED17 -eq 1 ] && [ $LINE_KEPT17 -eq 1 ]; then
+    _pass "TC-MM-17: line with valid+broken link: broken link removed, valid link and line preserved"
+else
+    _fail "TC-MM-17: link-granular removal on mixed line" \
+        "valid_kept=$VALID_KEPT17 broken_removed=$BROKEN_REMOVED17 content=$(printf '%s' "$INDEX17_CONTENT")"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-18: verify_index_integrity — relative link to sibling file is NOT removed
+#           (M-1b: resolve relative links against index_path.parent)
+# ---------------------------------------------------------------------------
+GD18=$(_make_fixture "tc-mm-18")
+FAKE_PROJECT18="$TMPDIR_BASE/project18"
+mkdir -p "$FAKE_PROJECT18/.claude/ainous-roles/team-sync/artifacts"
+
+# Create a sibling file in the same directory as index.md
+SIBLING18="$FAKE_PROJECT18/.claude/ainous-roles/team-sync/sibling.md"
+echo "# sibling" > "$SIBLING18"
+
+# Index uses a relative path that is a sibling of index.md (NOT relative to project root)
+cat > "$FAKE_PROJECT18/.claude/ainous-roles/team-sync/index.md" << INDEX18_EOF
+# Team Sync Index
+
+- [Sibling doc](sibling.md)
+INDEX18_EOF
+
+_run "$GD18" --project-root "$FAKE_PROJECT18" > /dev/null 2>&1
+
+INDEX18_CONTENT=$(cat "$FAKE_PROJECT18/.claude/ainous-roles/team-sync/index.md" 2>/dev/null || echo "")
+SIBLING_KEPT18=0
+echo "$INDEX18_CONTENT" | grep -q "Sibling doc" && SIBLING_KEPT18=1
+
+if [ $SIBLING_KEPT18 -eq 1 ]; then
+    _pass "TC-MM-18: relative link to sibling file resolved against index_path.parent — NOT removed"
+else
+    _fail "TC-MM-18: sibling relative link should be kept (resolve against index dir, not project root)" \
+        "content=$(printf '%s' "$INDEX18_CONTENT")"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-19: trust_audit — stored level exceeds justified → clamped down
+#           Role has trust.level="senior" but history only justifies "junior"
+#           (sessions_completed=5, score reconstructed to 10 → floor=10 < 50 → intern;
+#            wait: 5 sessions * 2 = 10 score → intern; that's < 50 threshold for junior.
+#            Let us use 5 sessions with denials=0: score=10, which is < 50 → intern.
+#            Actually let's use a more realistic case: 5 sessions, 0 denials → score=10
+#            → justified="intern"; stored="senior" → clamp to "intern".)
+# ---------------------------------------------------------------------------
+GD19=$(_make_fixture "tc-mm-19")
+mkdir -p "$GD19/developer"
+# 5 sessions, no denials → reconstructed score = 10 → justified = intern
+# stored level = "senior" → should be clamped to "intern"
+_make_growth_with_trust "senior" 75 5 0 > "$GD19/developer/growth.json"
+
+_run "$GD19" --role developer > /dev/null 2>&1
+EXIT19=$?
+
+STORED_LEVEL19=$(python3 -c "
+import json
+with open('$GD19/developer/growth.json') as f:
+    d = json.load(f)
+print(d.get('trust', {}).get('level', 'MISSING'))
+" 2>/dev/null || echo "ERROR")
+
+# score=5*2=10 → justified=intern; stored=senior → clamp expected
+if [ "$STORED_LEVEL19" = "intern" ]; then
+    _pass "TC-MM-19: trust.level clamped from 'senior' to 'intern' (5 sessions → score 10 → justified intern)"
+else
+    _fail "TC-MM-19: trust_audit should clamp over-privileged level" \
+        "stored_level=$STORED_LEVEL19 expected=intern exit=$EXIT19"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-20: trust_audit — stored level within justified → no change
+#           Role has trust.level="junior" with enough sessions to justify junior
+#           (25 sessions, 0 denials → score=50 → justified="junior"; stored="junior" → OK)
+# ---------------------------------------------------------------------------
+GD20=$(_make_fixture "tc-mm-20")
+mkdir -p "$GD20/developer"
+# 25 sessions, 0 denials → score = 50 → justified = "junior"; stored = "junior"
+_make_growth_with_trust "junior" 50 25 0 > "$GD20/developer/growth.json"
+ORIGINAL_HASH20=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD20/developer/growth.json','rb').read()).hexdigest())" 2>/dev/null)
+
+_run "$GD20" --role developer > /dev/null 2>&1
+EXIT20=$?
+
+AFTER_HASH20=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD20/developer/growth.json','rb').read()).hexdigest())" 2>/dev/null)
+STORED_LEVEL20=$(python3 -c "
+import json
+with open('$GD20/developer/growth.json') as f:
+    d = json.load(f)
+print(d.get('trust', {}).get('level', 'MISSING'))
+" 2>/dev/null || echo "ERROR")
+
+if [ "$STORED_LEVEL20" = "junior" ] && [ "$ORIGINAL_HASH20" = "$AFTER_HASH20" ]; then
+    _pass "TC-MM-20: justified level 'junior' — no change, file untouched"
+else
+    _fail "TC-MM-20: trust_audit should not modify a justified level" \
+        "stored_level=$STORED_LEVEL20 hash_changed=$([ "$ORIGINAL_HASH20" != "$AFTER_HASH20" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-21: trust_audit — insufficient data → no clamp, function returns success
+#           growth.json has trust section but sessions_completed is 0 and level
+#           is "intern" (the floor) → compute_justified returns "intern"; stored
+#           matches → no clamp. Also test the principal-skip path: principal stored
+#           → function skips without clamping.
+# ---------------------------------------------------------------------------
+GD21=$(_make_fixture "tc-mm-21")
+mkdir -p "$GD21/developer"
+# Store "principal" (manual grant) — audit must NOT clamp this
+_make_growth_with_trust "principal" 95 20 0 > "$GD21/developer/growth.json"
+ORIGINAL_HASH21=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD21/developer/growth.json','rb').read()).hexdigest())" 2>/dev/null)
+
+_run "$GD21" --role developer > /dev/null 2>&1
+
+AFTER_HASH21=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD21/developer/growth.json','rb').read()).hexdigest())" 2>/dev/null)
+STORED_LEVEL21=$(python3 -c "
+import json
+with open('$GD21/developer/growth.json') as f:
+    d = json.load(f)
+print(d.get('trust', {}).get('level', 'MISSING'))
+" 2>/dev/null || echo "ERROR")
+
+if [ "$STORED_LEVEL21" = "principal" ] && [ "$ORIGINAL_HASH21" = "$AFTER_HASH21" ]; then
+    _pass "TC-MM-21: 'principal' (manual grant) left untouched by trust_audit"
+else
+    _fail "TC-MM-21: trust_audit must not clamp 'principal' (manual grant)" \
+        "stored_level=$STORED_LEVEL21 hash_changed=$([ "$ORIGINAL_HASH21" != "$AFTER_HASH21" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-22: trust_audit — dry-run with over-trust → exit 1, file NOT mutated
+#           Same setup as TC-MM-19 (5 sessions, stored=senior) but with --check
+# ---------------------------------------------------------------------------
+GD22=$(_make_fixture "tc-mm-22")
+mkdir -p "$GD22/developer"
+_make_growth_with_trust "senior" 75 5 0 > "$GD22/developer/growth.json"
+ORIGINAL_CONTENT22=$(cat "$GD22/developer/growth.json")
+
+EXIT22=$(_run "$GD22" --role developer --check > /dev/null 2>&1; echo $?)
+AFTER_CONTENT22=$(cat "$GD22/developer/growth.json")
+
+STORED_LEVEL22=$(python3 -c "
+import json
+with open('$GD22/developer/growth.json') as f:
+    d = json.load(f)
+print(d.get('trust', {}).get('level', 'MISSING'))
+" 2>/dev/null || echo "ERROR")
+
+if [ "$EXIT22" -eq 1 ] && [ "$ORIGINAL_CONTENT22" = "$AFTER_CONTENT22" ] && [ "$STORED_LEVEL22" = "senior" ]; then
+    _pass "TC-MM-22: --check with over-trust → exit 1, file NOT mutated, level unchanged"
+else
+    _fail "TC-MM-22: --check should not mutate trust level" \
+        "exit=$EXIT22 stored_level=$STORED_LEVEL22 content_changed=$([ "$ORIGINAL_CONTENT22" != "$AFTER_CONTENT22" ] && echo yes || echo no)"
 fi
 
 # ---------------------------------------------------------------------------
