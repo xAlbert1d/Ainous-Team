@@ -34,3 +34,7 @@ build/
 .flutter-plugins-dependencies
 .packages
 pubspec.lock
+
+# Python build artifacts
+__pycache__/
+*.pyc
