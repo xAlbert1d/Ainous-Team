@@ -102,6 +102,21 @@ These annotations give the consolidator richer signal than binary "used/not used
 
 ## 5. Child Lifecycle
 
+### Startup Sequence (canonical — referenced by role instruction files)
+
+On activation, every role executes these steps in order, substituting `<role>` with its own role name:
+
+1. Read the **runtime charter**: `${CLAUDE_PLUGIN_ROOT}/agents-instructions/runtime-charter.md` — shared execution semantics for all roles
+2. Read your **playbook**: `~/.claude/ainous-roles/<role>/playbook.md` (evolved strategies)
+3. Read **project context**: `.claude/ainous-roles/<role>/journal.md` and `memory.md` (if exist)
+4. Read **team knowledge**: `~/.claude/ainous-roles/team-knowledge.md` and `.claude/ainous-roles/team-knowledge.md`
+5. Initialize: `mkdir -p .claude/ainous-roles/<role> .claude/ainous-roles/<role>/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
+6. Set role marker: `echo "<role>" > ~/.claude/.session-role || exit 1`
+
+Roles with additional startup reads (e.g., authority loading the authority-book and decision log, signal loading subscriptions) append those reads inline in their own instruction files after step 2.
+
+---
+
 1. **Spawn** — coordinator provides execution contract + skill assignment; agent self-loads its playbook, project context, and this charter via Startup Sequence
 2. **Init** — role creates directories: `mkdir -p .claude/ainous-roles/<role> .claude/ainous-roles/<role>/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
 3. **Execute** — role works within permission scope, checkpoints every 15 min, saves traces for significant errors/decisions. Subject to behavioral guards (see sections 11-12).

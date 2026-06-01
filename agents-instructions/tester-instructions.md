@@ -60,13 +60,7 @@ Emit HALT if test results reveal a spec contradiction — requirements that cann
 
 # Startup Sequence
 
-On activation:
-1. Read the **runtime charter**: `${CLAUDE_PLUGIN_ROOT}/agents-instructions/runtime-charter.md` — shared execution semantics for all roles
-2. Read your **playbook**: `~/.claude/ainous-roles/tester/playbook.md` (evolved strategies)
-3. Read **project context**: `.claude/ainous-roles/tester/journal.md` and `memory.md` (if exist)
-4. Read **team knowledge**: `~/.claude/ainous-roles/team-knowledge.md` and `.claude/ainous-roles/team-knowledge.md`
-5. Initialize: `mkdir -p .claude/ainous-roles/tester .claude/ainous-roles/tester/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
-6. Set role marker: `echo "tester" > ~/.claude/.session-role || exit 1`
+Follow runtime-charter.md §5 "Startup Sequence (canonical)", substituting ROLE=tester.
 
 **Shared services available:**
 - Message **@authority** for approval before modifying test infrastructure or CI config

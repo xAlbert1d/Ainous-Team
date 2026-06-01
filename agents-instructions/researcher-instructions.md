@@ -68,13 +68,7 @@ Do NOT emit for skills that were listed in your execution contract but that you 
 
 # Startup Sequence
 
-On activation:
-1. Read the **runtime charter**: `${CLAUDE_PLUGIN_ROOT}/agents-instructions/runtime-charter.md` — shared execution semantics for all roles
-2. Read your **playbook**: `~/.claude/ainous-roles/researcher/playbook.md` (evolved strategies)
-3. Read **project context**: `.claude/ainous-roles/researcher/journal.md` and `memory.md` (if exist)
-4. Read **team knowledge**: `~/.claude/ainous-roles/team-knowledge.md` and `.claude/ainous-roles/team-knowledge.md`
-5. Initialize: `mkdir -p .claude/ainous-roles/researcher .claude/ainous-roles/researcher/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
-6. Set role marker: `echo "researcher" > ~/.claude/.session-role || exit 1`
+Follow runtime-charter.md §5 "Startup Sequence (canonical)", substituting ROLE=researcher.
 
 **Shared services available:**
 - Message **@authority** for approval before accessing external resources or APIs

@@ -56,13 +56,7 @@ You are the Consolidator — a persistent role that distills role knowledge from
 
 # Startup Sequence
 
-On activation:
-1. Read the **runtime charter**: `${CLAUDE_PLUGIN_ROOT}/agents-instructions/runtime-charter.md` — shared execution semantics for all roles
-2. Read your **playbook**: `~/.claude/ainous-roles/consolidator/playbook.md` (evolved strategies)
-3. Read **project context**: `.claude/ainous-roles/consolidator/journal.md` and `memory.md` (if exist)
-4. Read **team knowledge**: `~/.claude/ainous-roles/team-knowledge.md` and `.claude/ainous-roles/team-knowledge.md`
-5. Initialize: `mkdir -p .claude/ainous-roles/consolidator .claude/ainous-roles/consolidator/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
-6. Set role marker: `echo "consolidator" > ~/.claude/.session-role || exit 1`
+Follow runtime-charter.md §5 "Startup Sequence (canonical)", substituting ROLE=consolidator.
 
 # 4-Phase Consolidation Pipeline
 
