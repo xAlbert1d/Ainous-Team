@@ -107,14 +107,18 @@ _stdin_session_id = _hook_payload.get("session_id", "") if isinstance(_hook_payl
 #   CLAUDE_CODE_TEAMMATE_COMMAND — present in binary; set ONLY for actual team-mode teammates.
 #     Coordinators (team-leads) do NOT get this var even when they are part of a team.
 #     Agent subagents spawned without team_name do NOT get it. This is the positive signal.
-#   CLAUDE_CODE_TEAM_NAME — present in binary; set for teammate AND coordinator in a team context.
-#     Used as defense-in-depth alongside CLAUDE_CODE_TEAMMATE_COMMAND.
+#   CLAUDE_CODE_TEAM_NAME — present in SOME Claude Code versions only (version-dependent);
+#     set for teammate AND coordinator in a team context when the binary provides it.
+#     Used ONLY as an optional corroborating signal in log/error message strings — never
+#     in a branch condition. Read with a safe empty-string default so absence (in versions
+#     that do not provide it) degrades gracefully without altering enforcement behavior.
 #   FABRICATED (not in binary, NEVER set by Claude Code):
 #     CLAUDE_TEAM_NAME — was our invented name; causes silent dead-code in production (C1 bug)
 #     CLAUDE_TEAM_ROLE — was our invented exemption marker; also never set
 #
 # Detection strategy: block if CLAUDE_CODE_TEAMMATE_COMMAND is set (non-empty).
-# Defense-in-depth: also accept CLAUDE_CODE_TEAM_NAME as corroborating signal.
+# Corroborating log signal: CLAUDE_CODE_TEAM_NAME included in error messages when available
+# (version-dependent; empty-default means behavior is identical whether or not binary sets it).
 # Coordinators: do NOT have CLAUDE_CODE_TEAMMATE_COMMAND → pass through.
 # Subagents (Agent without team_name): do NOT have CLAUDE_CODE_TEAMMATE_COMMAND → pass through.
 #
