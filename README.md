@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.8.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.10.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -343,6 +343,16 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.10.0
+
+Two HIGH-severity security fixes ship in this release, both independently verified. S-1: `hooks/spawn-telemetry` now charset-validates and realpath-contains the per-spawn nonce path to `~/.claude/teams` before writing — an attacker-controlled `team_name` or `teammate_name` in a spawn event could previously escape the teams directory via path traversal and write to arbitrary filesystem locations; the hook now fails open (telemetry skipped) on any path that does not resolve within the expected tree. S-2: `hooks/write-proxy` tightens the HMAC nonce lookup across all four identity-resolution tiers so the lookup is bound to the matched spawn event's names, never to caller-supplied `tool_input` fields; `_find_spawn_event` was switched from OR-matching to AND-matching on name fields; and Tier-1 now rejects mismatches between the envelope's claimed name and the matched event — closing a cross-teammate nonce-redirection bypass of the C-2 HMAC gate. A third wiring fix (Q-12): `WebFetch`/`WebSearch` are now wired into the `authority-enforce` PreToolUse matcher for the teammate block introduced in v5.9.3 — the check was registered in the script but the tool-name branch was never reached in practice, so the block never ran. One residual accepted as MEDIUM: the O_TRUNC nonce overwrite on crash-recovery re-spawn (R-nonce-clobber) is documented but not patched, as the fix requires disabling crash recovery for the spawner; the worst-case outcome is a self-defeating DoS by an already-trusted spawner.
+
+Mechanical memory enforcement is new in v5.10.0 via `scripts/memory-maintain.py`. Memory caps, learnings dedup and orphan-prune, expired-decision rotation, stale-fact flagging, and knowledge-index integrity were previously enforced only as consolidator prompt instructions, meaning they silently did not run if consolidation was skipped and memory grew unbounded. The script is now invoked fail-open from the SessionEnd hook and checked in the pre-ship gate. It ships with a `--check`/`--dry-run` mode and a 16-case test suite in `tests/test-memory-maintain.sh`.
+
+The consolidator and researcher roles are re-tiered to `opus` using family aliases, so any Claude Code version resolves them to its latest available model without version pinning. A new `docs/NEWER-MODELS.md` documents opt-in enhancements for Claude Code versions that support `effort:` frontmatter, `opusplan`, or `opus[1m]` context windows — the plugin remains model- and version-agnostic and none of these are required.
+
+Package cleanup reduced the distributable: three command-orchestration docs (`team-review`, `team-review-periodic`, `team-implement`) moved from `skills/` to `commands/` where they belong; three off-mission content skills (`video-script`, `video-edit`, `caption-format`) removed; the Flutter pm-client companion app extracted out of the package into a sibling directory; a dead Layer-2 audit script and an unused template removed. Skill count went from 57 to 54. The `confidence-calibration` skill was promoted to `default_skills` across 10 roles, and the duplicated Startup Sequence text was consolidated into a single runtime-charter reference.
 
 ## What's new in v5.2.0–v5.8.0
 
