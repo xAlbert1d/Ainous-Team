@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 62 skills, that learn and improve over time. v5.16.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 63 skills, that learn and improve over time. v5.17.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -104,7 +104,7 @@ The coordinator has Write/Bash for journal writes but delegates all implementati
 ainous-team plugin
 |-- 12 agents        -- coordinator, developer, architect, code-quality, tester,
 |                       researcher, writer, security, authority, consolidator, retriever, signal
-|-- 62 skills        -- domain-expertise (see Skills Vault below)
+|-- 63 skills        -- domain-expertise (see Skills Vault below)
 |-- 8 commands       -- /team-status, /team-history, /team-alerts, /team-retro, /team-signal,
 |                       /team-review, /team-review-periodic, /team-implement
 |-- 2 hooks          -- SessionStart (context injection), PreToolUse (enforcement)
@@ -135,7 +135,7 @@ The team implements patterns from recent harness engineering research:
 | **Exploration force** | [Meta-Harness](https://yoonholee.com/meta-harness/) | Consolidator injects `[experimental]` strategies with maturity-decaying rate |
 | **Soft enforcement** | Original | Main session gets NOTE when writing directly in coordinator-as-default mode |
 | **Failure taxonomy** | NLAH + Anthropic | 7 named failure modes with prescribed recovery actions |
-| **Skills vault** | Original + gstack + community | 62 skills across 10 domains, assigned at spawn, invoked autonomously by roles |
+| **Skills vault** | Original + gstack + community | 63 skills across 10 domains, assigned at spawn, invoked autonomously by roles |
 | **Session event log** | Anthropic Managed Agents | 7 event types in task-history.jsonl; enables crash recovery |
 | **Knowledge lint** | Karpathy LLM Wiki | Consolidator detects contradictions and orphans across knowledge stores |
 | **Structured retrieval tags** | MemPalace | Journal entries tagged by task-type and area; retriever pre-filters |
@@ -185,11 +185,11 @@ Topologies compose phases: `full-pipeline: [research, design, implement, test, r
 
 ### Skills Vault
 
-62 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
+63 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
 
 The three pipeline-orchestration commands (`/team-implement`, `/team-review`, `/team-review-periodic`) were commands all along and now live in `commands/`.
 
-**Domain-expertise skills (62):**
+**Domain-expertise skills (63):**
 
 | Category | Skills |
 |----------|--------|
@@ -201,12 +201,12 @@ The three pipeline-orchestration commands (`/team-implement`, `/team-review`, `/
 | **Research & Analysis** | deep-research, knowledge-structure, source-validate, competitive-intel |
 | **Writing & Content** | scqa, content-repurpose, tone-enforce, summarize, copywriting, docs, present |
 | **Visual & Design** | diagram, infographic, flowchart, ui-layout |
-| **Image Generation** | image-craft-base, image-hero, image-icon, image-texture, image-background, image-social-card, image-thumbnail, image-illustration |
+| **Image Generation** | codex-image-gen, image-craft-base, image-hero, image-icon, image-texture, image-background, image-social-card, image-thumbnail, image-illustration |
 | **Video & Media** | video-script, video-edit, caption-format |
 
 An `image-*` family (image-hero, -icon, -texture, -background, -social-card, -thumbnail, -illustration, + shared image-craft-base) authors gpt-image-2 prompts for different artifact types.
 
-The image-* skills author prompts and hand off to a `codex-image-gen` skill (drives the OpenAI Codex CLI / gpt-image-2) — install that skill + Codex separately; it is a prerequisite, not bundled.
+`codex-image-gen` (the execution layer the image-* skills hand off to) is now BUNDLED in the plugin. It drives the OpenAI Codex CLI / gpt-image-2 — so it works for anyone who has the Codex desktop app (or `codex` CLI) installed and authenticated; no separate image-API key needed. Without Codex installed, the image-* skills still author correct prompts but cannot execute the generation.
 
 Review ordering is two-stage: spec compliance before quality (catches structural misses before style nits).
 
@@ -348,6 +348,10 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.17.0
+
+Bundles the `codex-image-gen` execution-layer skill into the plugin, making the image-* family self-contained. Any installer who has the Codex desktop app or `codex` CLI installed and authenticated can now generate images without a separate API key — `codex-image-gen` drives the OpenAI Codex CLI / gpt-image-2 and is no longer an external prerequisite. Previously, installers had to obtain and configure `codex-image-gen` separately; that step is now gone. Skill count moves from 62 to 63.
 
 ## What's new in v5.16.0
 
