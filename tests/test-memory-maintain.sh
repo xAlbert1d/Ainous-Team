@@ -24,6 +24,11 @@
 #   TC-MM-20: trust_audit — stored level within justified → no change
 #   TC-MM-21: trust_audit — insufficient data → no clamp, returns success
 #   TC-MM-22: trust_audit — dry-run with over-trust → exit 1, file NOT mutated
+#   TC-MM-31: detect_external_mutation — file changed externally after baseline -> WARNING emitted
+#   TC-MM-32: detect_external_mutation — our own write updates baseline -> no false warning next run
+#   TC-MM-33: detect_external_mutation — --dry-run does NOT write the baseline
+#   TC-MM-34: detect_external_mutation — first run (no baseline) -> no warning, baseline created
+#   TC-MM-35: ensure_protective_header — header added once, not duplicated
 #
 # Run: bash tests/test-memory-maintain.sh
 # Exit 0 = all pass; exit 1 = at least one failure.
@@ -934,6 +939,155 @@ if [ ! -f "$GD30/authority/decisions-archive.md.new" ]; then
 else
     _fail "TC-MM-30: .new file still present after WAL promotion" \
         "found: $GD30/authority/decisions-archive.md.new"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-31: external mutation detection — file changed externally after baseline
+#           → WARNING emitted on next run
+# ---------------------------------------------------------------------------
+GD31=$(_make_fixture "tc-mm-31")
+mkdir -p "$GD31/developer"
+
+# Write a playbook so the script has something to process
+cat > "$GD31/developer/playbook.md" << PB31_EOF
+# Playbook
+
+### strategy-1
+Do things well.
+PB31_EOF
+
+# First run: establishes baseline (last_written_by_us: true)
+_run "$GD31" --role developer > /dev/null 2>&1
+
+# Simulate external mutation: change the file AFTER baseline was written
+# (do NOT go through memory-maintain — simulates AutoDream or other agent)
+echo "EXTERNALLY ADDED LINE" >> "$GD31/developer/playbook.md"
+echo "EXTERNALLY ADDED LINE 2" >> "$GD31/developer/playbook.md"
+echo "EXTERNALLY ADDED LINE 3" >> "$GD31/developer/playbook.md"
+
+# Second run: should detect the mutation and emit WARNING
+OUTPUT31=$(_run "$GD31" --role developer 2>&1)
+
+if echo "$OUTPUT31" | grep -q "external modification detected"; then
+    _pass "TC-MM-31: external mutation after baseline → WARNING emitted"
+else
+    _fail "TC-MM-31: should warn on external mutation" \
+        "output did not contain 'external modification detected'; output=${OUTPUT31}"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-32: our own write updates baseline — no false warning on next run
+# ---------------------------------------------------------------------------
+GD32=$(_make_fixture "tc-mm-32")
+mkdir -p "$GD32/developer"
+
+# Create a playbook with >50 sessions to trigger a mutation via session cap
+_make_growth_json 55 > "$GD32/developer/growth.json"
+cat > "$GD32/developer/playbook.md" << PB32_EOF
+# Playbook
+
+### strategy-1
+Do things well.
+PB32_EOF
+
+# First run: establishes baseline + may mutate growth.json
+_run "$GD32" --role developer > /dev/null 2>&1
+
+# Second run immediately after — no external changes; should NOT warn
+OUTPUT32=$(_run "$GD32" --role developer 2>&1)
+
+if echo "$OUTPUT32" | grep -q "external modification detected"; then
+    _fail "TC-MM-32: false positive — our own write should not trigger external-mutation warning" \
+        "output=${OUTPUT32}"
+else
+    _pass "TC-MM-32: no false positive after our own write updates the baseline"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-33: --dry-run does NOT write the baseline
+# ---------------------------------------------------------------------------
+GD33=$(_make_fixture "tc-mm-33")
+mkdir -p "$GD33/developer"
+
+cat > "$GD33/developer/playbook.md" << PB33_EOF
+# Playbook
+
+### strategy-1
+Something useful.
+PB33_EOF
+
+# Run with --dry-run — must NOT create .memory-baseline.json
+_run "$GD33" --role developer --dry-run > /dev/null 2>&1
+
+if [ ! -f "$GD33/developer/.memory-baseline.json" ]; then
+    _pass "TC-MM-33: --dry-run does NOT write .memory-baseline.json"
+else
+    _fail "TC-MM-33: --dry-run must not write baseline" \
+        "baseline file was created: $GD33/developer/.memory-baseline.json"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-34: first run (no baseline) → no warning, baseline created
+# ---------------------------------------------------------------------------
+GD34=$(_make_fixture "tc-mm-34")
+mkdir -p "$GD34/developer"
+
+cat > "$GD34/developer/playbook.md" << PB34_EOF
+# Playbook
+
+### strategy-1
+First time.
+PB34_EOF
+
+# First run with no pre-existing baseline — must NOT warn about external mutation
+OUTPUT34=$(_run "$GD34" --role developer 2>&1)
+
+BASELINE_CREATED34=0
+[ -f "$GD34/developer/.memory-baseline.json" ] && BASELINE_CREATED34=1
+
+HAS_WARN34=0
+echo "$OUTPUT34" | grep -q "external modification detected" && HAS_WARN34=1
+
+if [ "$HAS_WARN34" -eq 0 ] && [ "$BASELINE_CREATED34" -eq 1 ]; then
+    _pass "TC-MM-34: first run — no warning, baseline created"
+else
+    _fail "TC-MM-34: first run should create baseline without warning" \
+        "has_warn=$HAS_WARN34 baseline_created=$BASELINE_CREATED34"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-35: protective header added once, not duplicated
+# ---------------------------------------------------------------------------
+GD35=$(_make_fixture "tc-mm-35")
+mkdir -p "$GD35/developer"
+
+HEADER_LINE="<!-- ainous-team managed memory — do not auto-prune; see docs/REFERENCES.md -->"
+
+cat > "$GD35/developer/playbook.md" << PB35_EOF
+# Playbook
+
+### strategy-1
+Some strategy.
+PB35_EOF
+
+# First run: header should be added
+_run "$GD35" --role developer > /dev/null 2>&1
+
+HEADER_COUNT35=$(grep -cF "$HEADER_LINE" "$GD35/developer/playbook.md" 2>/dev/null || echo 0)
+
+if [ "$HEADER_COUNT35" -ne 1 ]; then
+    _fail "TC-MM-35 (first run): header should appear exactly once after first run" \
+        "header_count=$HEADER_COUNT35"
+else
+    # Second run: header must NOT be duplicated
+    _run "$GD35" --role developer > /dev/null 2>&1
+    HEADER_COUNT35B=$(grep -cF "$HEADER_LINE" "$GD35/developer/playbook.md" 2>/dev/null || echo 0)
+    if [ "$HEADER_COUNT35B" -eq 1 ]; then
+        _pass "TC-MM-35: protective header added once on first run, not duplicated on second run"
+    else
+        _fail "TC-MM-35: header should not be duplicated" \
+            "header_count after second run=$HEADER_COUNT35B"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

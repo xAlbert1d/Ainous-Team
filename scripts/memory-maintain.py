@@ -33,6 +33,7 @@ Exit codes:
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import pathlib
@@ -159,6 +160,312 @@ def _wal_write(target: pathlib.Path, content: str) -> bool:
         except OSError:
             pass
         return False
+
+
+# ---------------------------------------------------------------------------
+# External-mutation detection
+# ---------------------------------------------------------------------------
+
+#: Files maintained per-role (relative names within GROWTH_DIR/<role>/).
+#: team-knowledge.md lives at the root of GROWTH_DIR — handled separately.
+_ROLE_MANAGED_FILES = ("playbook.md", "journal.md", "learnings.jsonl")
+
+#: Heuristic: AutoDream's documented index line-limit.
+_AUTODREAM_LINE_LIMIT = 200
+
+#: Header comment we embed in plaintext managed files as a low-cost intent signal.
+MANAGED_HEADER = "<!-- ainous-team managed memory — do not auto-prune; see docs/REFERENCES.md -->"
+
+
+def _sha256_file(path: pathlib.Path) -> Optional[str]:
+    """Return the hex SHA-256 digest of *path*, or None on I/O error."""
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _line_count_file(path: pathlib.Path) -> int:
+    """Return the number of lines in *path*, or -1 on I/O error."""
+    try:
+        return len(path.read_bytes().splitlines())
+    except OSError:
+        return -1
+
+
+def detect_external_mutation(
+    role: str,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """Detect whether managed memory files were modified outside ainous-team.
+
+    DETECTION ONLY — this function surfaces evidence of external mutation; it
+    cannot prevent a background platform agent (such as Claude Code's AutoDream
+    consolidator, whose scan scope is unverified) from editing files.  The
+    intent is to make external changes visible so the operator/consolidator can
+    review them before the next ainous-team write cycle overwrites the baseline.
+
+    Algorithm
+    ---------
+    For each per-role managed file (playbook.md, journal.md, learnings.jsonl)
+    and for team-knowledge.md at the GROWTH_DIR root:
+
+    1. Read the stored baseline from ``GROWTH_DIR/<role>/.memory-baseline.json``.
+    2. Compare the file's current sha256 / line_count against the baseline.
+    3. If the content has changed AND the baseline recorded
+       ``last_written_by_us: true`` (meaning ainous-team wrote it last and any
+       change since must be external), emit a WARNING via _log(always=True).
+       The warning names the file, the line-count delta, and the heuristic
+       AutoDream signal when applicable.
+    4. In --dry-run/--check mode: compare and report but do NOT update the
+       baseline (caller must call update_external_mutation_baseline after the
+       role's mutating operations complete).
+    5. Fail-safe: any exception inside this function is caught; detection
+       failure must NOT abort memory-maintain.
+
+    The caller (main per-role loop) must call
+    ``update_external_mutation_baseline(role)`` AFTER all mutating functions
+    complete, so that our own writes do not trigger a false positive next run.
+
+    Returns True always (detection is advisory; failures are logged).
+    """
+    try:
+        baseline_path = GROWTH_DIR / role / ".memory-baseline.json"
+        baseline: dict = {}
+        if baseline_path.exists():
+            try:
+                baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                _log(
+                    f"detect_external_mutation({role}): cannot read baseline: {exc} — skipping check",
+                    verbose,
+                )
+                return True
+
+        # Build the list of (label, path) pairs to inspect.
+        candidates: list[tuple[str, pathlib.Path]] = []
+        for fname in _ROLE_MANAGED_FILES:
+            p = GROWTH_DIR / role / fname
+            if p.exists():
+                candidates.append((fname, p))
+        # team-knowledge.md lives at GROWTH_DIR root (not role-scoped)
+        tk_path = GROWTH_DIR / "team-knowledge.md"
+        if tk_path.exists():
+            candidates.append(("team-knowledge.md", tk_path))
+
+        for label, path in candidates:
+            stored = baseline.get(label, {})
+            if not stored:
+                # First run — no baseline yet; skip warning, will be written after.
+                _log(
+                    f"detect_external_mutation({role}): no baseline for {label} — first run, will record",
+                    verbose,
+                )
+                continue
+
+            last_written_by_us = stored.get("last_written_by_us", False)
+            if not last_written_by_us:
+                # We did not write this file last — any change may be expected.
+                _log(
+                    f"detect_external_mutation({role}): {label} not marked last_written_by_us — skipping mutation check",
+                    verbose,
+                )
+                continue
+
+            stored_sha = stored.get("sha256", "")
+            stored_lines = stored.get("line_count", -1)
+            current_sha = _sha256_file(path)
+            current_lines = _line_count_file(path)
+
+            if current_sha is None:
+                _log(
+                    f"detect_external_mutation({role}): cannot read {label} for sha256 check",
+                    verbose,
+                )
+                continue
+
+            if current_sha == stored_sha:
+                _log(
+                    f"detect_external_mutation({role}): {label} unchanged since last ainous-team write",
+                    verbose,
+                )
+                continue
+
+            # Content changed since we wrote it — external modification detected.
+            delta = (
+                f"+{current_lines - stored_lines}"
+                if stored_lines >= 0 and current_lines >= 0
+                else "unknown"
+            )
+            autodream_note = ""
+            if (
+                stored_lines > _AUTODREAM_LINE_LIMIT
+                and 0 <= current_lines <= _AUTODREAM_LINE_LIMIT + 5
+            ):
+                autodream_note = (
+                    f"  [heuristic: file now at {current_lines} lines "
+                    f"which matches AutoDream {_AUTODREAM_LINE_LIMIT}-line index limit]"
+                )
+
+            _log(
+                f"WARNING: external modification detected for {path} "
+                f"(role={role}, file={label}): "
+                f"line_count {stored_lines} -> {current_lines} (delta {delta}).  "
+                f"Modification occurred since last ainous-team write — "
+                f"possible AutoDream/other background consolidation; "
+                f"review before trusting.{autodream_note}",
+                always=True,
+            )
+
+    except Exception as exc:  # pylint: disable=broad-except
+        # Fail-safe: detection must never abort memory-maintain.
+        _log(
+            f"detect_external_mutation({role}): unexpected error (non-fatal): {exc}",
+            always=True,
+        )
+
+    return True
+
+
+def update_external_mutation_baseline(
+    role: str,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> None:
+    """Write (or update) the per-role mutation-detection baseline.
+
+    Records current sha256, line_count, and mtime for each managed file,
+    and sets ``last_written_by_us: true`` so the next run knows ainous-team
+    wrote these files last.
+
+    Honors --dry-run/--check: in that mode the baseline is NOT written (we
+    only reported, not mutated).
+
+    Uses advisory lock + WAL pattern for the baseline write.
+    Fail-safe: any exception is caught and logged; failures must not abort
+    memory-maintain.
+    """
+    if dry_run:
+        _log(
+            f"update_external_mutation_baseline({role}): --dry-run — skipping baseline write",
+            verbose,
+        )
+        return
+
+    try:
+        baseline_path = GROWTH_DIR / role / ".memory-baseline.json"
+        lock_path = GROWTH_DIR / role / ".memory-baseline.lock"
+
+        acquired, lock_fd = _acquire_advisory_lock(lock_path)
+        if not acquired:
+            _log(
+                f"update_external_mutation_baseline({role}): could not acquire lock — skipping baseline write",
+                always=True,
+            )
+            return
+
+        try:
+            # Re-read existing baseline so we don't lose entries for files that
+            # may have disappeared between detect and update.
+            existing: dict = {}
+            if baseline_path.exists():
+                try:
+                    existing = json.loads(baseline_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    existing = {}
+
+            candidates: list[tuple[str, pathlib.Path]] = []
+            for fname in _ROLE_MANAGED_FILES:
+                p = GROWTH_DIR / role / fname
+                if p.exists():
+                    candidates.append((fname, p))
+            tk_path = GROWTH_DIR / "team-knowledge.md"
+            if tk_path.exists():
+                candidates.append(("team-knowledge.md", tk_path))
+
+            updated = dict(existing)
+            for label, path in candidates:
+                sha = _sha256_file(path)
+                lc = _line_count_file(path)
+                try:
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    mtime = None
+                updated[label] = {
+                    "sha256": sha or "",
+                    "line_count": lc,
+                    "mtime": mtime,
+                    "last_written_by_us": True,
+                    "recorded_at": _ts(),
+                }
+
+            content = json.dumps(updated, indent=2) + "\n"
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            ok = _wal_write(baseline_path, content)
+            if ok:
+                _log(
+                    f"update_external_mutation_baseline({role}): baseline updated for "
+                    f"{[lbl for lbl, _ in candidates]}",
+                    verbose,
+                )
+            else:
+                _log(
+                    f"update_external_mutation_baseline({role}): WAL write failed",
+                    always=True,
+                )
+        finally:
+            _release_advisory_lock(lock_path, lock_fd)
+
+    except Exception as exc:  # pylint: disable=broad-except
+        _log(
+            f"update_external_mutation_baseline({role}): unexpected error (non-fatal): {exc}",
+            always=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Protective header
+# ---------------------------------------------------------------------------
+
+
+def ensure_protective_header(
+    path: pathlib.Path,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """Prepend MANAGED_HEADER to *path* if it is absent.
+
+    This is a low-cost intent signal for background agents such as AutoDream.
+    Whether AutoDream honors it is unverified — the header documents intent and
+    is harmless.  Only adds the header once; never duplicates.
+
+    Uses WAL-safe write.  Honors --dry-run.
+    Returns True on success or when no change was needed; False on I/O failure.
+    """
+    if not path.exists():
+        return True
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _log(f"ensure_protective_header: cannot read {path}: {exc}", verbose)
+        return False
+
+    if MANAGED_HEADER in text:
+        _log(f"ensure_protective_header: header already present in {path}", verbose)
+        return True
+
+    _log(f"ensure_protective_header: adding header to {path}", verbose, always=False)
+    if dry_run:
+        _log(f"[dry-run] would add protective header to {path}", always=True)
+        return True  # Not a violation — this is additive and safe; don't penalize --check
+
+    new_text = MANAGED_HEADER + "\n" + text
+    return _wal_write(path, new_text)
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1451,16 @@ def main() -> int:
     else:
         # Per-role operations
         for role in roles:
+            # --- External-mutation detection (MUST run first, before any mutating ops) ---
+            detect_external_mutation(role, dry_run=dry_run, verbose=verbose)
+
+            # --- Protective headers (additive intent signal; non-mutating in terms of caps) ---
+            for _hdr_name in ("playbook.md",):
+                _hdr_path = GROWTH_DIR / role / _hdr_name
+                ensure_protective_header(_hdr_path, dry_run=dry_run, verbose=verbose)
+            # team-knowledge.md lives at GROWTH_DIR root
+            ensure_protective_header(GROWTH_DIR / "team-knowledge.md", dry_run=dry_run, verbose=verbose)
+
             ok = enforce_session_cap(role, dry_run=dry_run, verbose=verbose)
             all_ok = all_ok and ok
 
@@ -1161,6 +1478,9 @@ def main() -> int:
 
             ok = cap_sessions_archive(role, dry_run=dry_run, verbose=verbose)
             all_ok = all_ok and ok
+
+            # --- Update baseline AFTER all mutating ops so our writes are recorded ---
+            update_external_mutation_baseline(role, dry_run=dry_run, verbose=verbose)
 
     # Global operations — always run regardless of whether any role dirs exist.
     # These operate on global files (team-knowledge.md, decisions.md, index.md)
