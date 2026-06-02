@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.13.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.14.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -343,6 +343,30 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.14.0
+
+Closes the research-sourced improvement backlog (`docs/REFERENCES.md`), in two waves.
+
+**P1 — learning-loop & governance hardening.** The consolidator now runs a **semantic-taint corroboration
+gate** (NeuroTaint): a learning that originates from a taint-flagged session is not promoted to
+`verified` until an independent, untainted session corroborates it — taint no longer launders into trusted
+memory. A **utility validation gate** (Darwin Gödel Machine) replaces "promote because it sounds useful"
+with "keep because utility held or improved": `scripts/memory-maintain.py` now surfaces per-strategy
+utility data (lowest-utility candidates, dedup prefers higher utility), and the consolidator keeps a
+promoted strategy only if its utility trend stays non-negative over N sessions. Coordinator **synthesis**
+now weights by argument/evidence quality and explicitly surfaces the highest-confidence dissenting view —
+consensus is no longer treated as a correctness signal (NeurIPS 2025: single-line anti-conformity is
+necessary but not sufficient; the existing injection is retained).
+
+**P2 — boundary & lifecycle.** A new **WebFetch/WebSearch injection detector** hook scans fetched/searched
+content for indirect-prompt-injection patterns (instruction override, role/turn injection, fake tool-call
+blocks, hidden HTML-comment directives, base64 instruction blobs) and annotates the context with a warning
+plus a forensic log. It is honestly a **detector, not a sanitizer** — a PostToolUse hook cannot reliably
+rewrite tool output in a version-agnostic way, so rather than overclaim, it warns and leaves taint-tagging
+as the second line; older Claude Code that drops the annotation still gets the taint gate and the forensic
+log. New **SubagentStop observability** logs `background_tasks`/`session_crons` counts (newer-CC fields,
+absent-tolerant) to task-history for lifecycle visibility.
 
 ## What's new in v5.13.0
 
