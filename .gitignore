@@ -38,3 +38,6 @@ pubspec.lock
 # Python build artifacts
 __pycache__/
 *.pyc
+
+# Auto-generated coordinator identity (ainous-team plugin)
+.claude/CLAUDE.md
