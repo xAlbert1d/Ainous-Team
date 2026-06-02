@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.14.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.14.1.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -343,6 +343,21 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.14.1
+
+Install correctness and a fully-green test suite. **Fresh-install fix:** `scripts/setup.sh` now
+initializes the complete 4-file role scaffold — it previously created only `playbook.md` + `growth.json`
+(universal, `~/.claude/ainous-roles/`) and never the `journal.md` + `learnings.jsonl` (project,
+`.claude/ainous-roles/`) that the release gate `verify-role-infrastructure.sh` requires, so a fresh
+install could never pass the plugin's own Gate 1. Setup is idempotent (never clobbers existing memory).
+With this, all six pre-ship gates pass after a clean install. **Test-suite repair:** the bats suite is now
+fully green (159/159, 2 intentional skips). The `authority-enforce.bats` harness now establishes a valid
+session + taint-nonce context the way the real `session-start` hook does (9 tests were failing because the
+hook correctly fail-closed on an unfaithful harness — not a plugin bug); two tests with stale expectations
+were aligned to current S-2 behavior. The `verify-artifact.sh` fallback YAML parser (used when PyYAML is
+absent) was fixed — a block-list key was initialized to `None` instead of `[]`, silently dropping all list
+items and making section/frontmatter enforcement a no-op without PyYAML.
 
 ## What's new in v5.14.0
 
