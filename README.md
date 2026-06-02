@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.12.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 54 skills, that learn and improve over time. v5.12.1.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -343,6 +343,21 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.12.1
+
+Maintenance and enforcement-hygiene release closing the last of the architecture-review backlog. The
+cold-storage archive files (`sessions-archive.jsonl`, `decisions-archive.md`) are now capped by
+`scripts/memory-maintain.py` — capping the hot session array in v5.11.0 had merely moved the
+unbounded-growth problem one file downstream; the archives now keep the most recent N entries (500
+sessions / 200 decision blocks) and drop the oldest, WAL-safe. A new pre-ship **Gate 5**
+(`scripts/verify-model-consistency.sh`) mechanically asserts that each role's authoritative
+`agents/<role>.md` model frontmatter matches its `capabilities/<role>.json` value, catching the
+dual-source drift we previously had to manage by hand. Finally, the NORMATIVE-vs-ENFORCED appendix in
+`CLAUDE-DESIGN.md` is brought current — the memory caps, dedup/prune, decision rotation, stale-fact
+flagging, index integrity, trust-level audit, archive capping, and model-consistency check are now
+correctly classified ENFORCED, with the genuinely judgment-bound mechanisms (strategy retirement,
+trust raising, poisoned-memory promotion) explicitly marked as intentionally permanent NORMATIVE.
 
 ## What's new in v5.12.0
 
