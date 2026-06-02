@@ -29,6 +29,13 @@
 #   TC-MM-33: detect_external_mutation — --dry-run does NOT write the baseline
 #   TC-MM-34: detect_external_mutation — first run (no baseline) -> no warning, baseline created
 #   TC-MM-35: ensure_protective_header — header added once, not duplicated
+#   TC-MM-36: dedup_learnings — higher utility wins over lower utility (same key/type)
+#   TC-MM-37: dedup_learnings — equal utility falls back to higher confidence tiebreak
+#   TC-MM-38: dedup_learnings — utility=N>0 beats utility=0 (missing field default)
+#   TC-MM-39: report_utility flags utility<=0 entries in --check output
+#   TC-MM-40: report_utility in --check mode writes nothing (read-only contract)
+#   TC-MM-41: enforce_playbook_cap over-cap names lowest-utility candidates with consolidator note
+#   TC-MM-42: enforce_playbook_cap over-cap with --dry-run writes nothing
 #
 # Run: bash tests/test-memory-maintain.sh
 # Exit 0 = all pass; exit 1 = at least one failure.
@@ -1088,6 +1095,284 @@ else
         _fail "TC-MM-35: header should not be duplicated" \
             "header_count after second run=$HEADER_COUNT35B"
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# Helper: build a learning line with a utility field
+# ---------------------------------------------------------------------------
+_learning_line_with_utility() {
+    local key="$1" ltype="$2" ts="$3" insight="$4" confidence="$5" utility="$6" files="${7:-[]}"
+    python3 -c "
+import json, sys
+print(json.dumps({
+    'timestamp': sys.argv[3],
+    'role': 'developer',
+    'type': sys.argv[2],
+    'key': sys.argv[1],
+    'insight': sys.argv[4],
+    'confidence': float(sys.argv[5]),
+    'utility': int(sys.argv[6]),
+    'files': json.loads(sys.argv[7]),
+}))
+" "$key" "$ltype" "$ts" "$insight" "$confidence" "$utility" "$files"
+}
+
+# ---------------------------------------------------------------------------
+# TC-MM-36: dedup_learnings — higher utility wins over lower utility (same key/type)
+#           Entry with utility=5 should beat entry with utility=1, regardless
+#           of which was written last (utility is the primary tiebreak).
+# ---------------------------------------------------------------------------
+GD36=$(_make_fixture "tc-mm-36")
+mkdir -p "$GD36/developer"
+# Write lower-utility entry first, then higher-utility entry second.
+# Old behaviour (confidence-only) would keep the second (last-write);
+# new behaviour: second has lower utility (1 < 5), so FIRST must win.
+{
+    _learning_line_with_utility "util-key" "pattern" "2026-01-01T00:00:00Z" "high utility insight" "0.7" "5"
+    _learning_line_with_utility "util-key" "pattern" "2026-03-01T00:00:00Z" "low utility insight"  "0.9" "1"
+} > "$GD36/developer/learnings.jsonl"
+
+_run "$GD36" --role developer > /dev/null 2>&1
+
+AFTER_LINES36=$(grep -c . "$GD36/developer/learnings.jsonl" 2>/dev/null || echo 0)
+KEPT_INSIGHT36=$(python3 -c "
+import json
+lines = [l.strip() for l in open('$GD36/developer/learnings.jsonl') if l.strip()]
+for e in (json.loads(l) for l in lines):
+    if e.get('key') == 'util-key':
+        print(e.get('insight',''))
+        break
+" 2>/dev/null || echo "")
+KEPT_UTILITY36=$(python3 -c "
+import json
+lines = [l.strip() for l in open('$GD36/developer/learnings.jsonl') if l.strip()]
+for e in (json.loads(l) for l in lines):
+    if e.get('key') == 'util-key':
+        print(e.get('utility', 'MISSING'))
+        break
+" 2>/dev/null || echo "")
+
+if [ "$AFTER_LINES36" -eq 1 ] && [ "$KEPT_UTILITY36" = "5" ]; then
+    _pass "TC-MM-36: dedup prefers higher utility (utility=5 kept over utility=1)"
+else
+    _fail "TC-MM-36: dedup should prefer higher utility" \
+        "after_lines=$AFTER_LINES36 kept_utility=$KEPT_UTILITY36 kept_insight=${KEPT_INSIGHT36@Q}"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-37: dedup_learnings — equal utility falls back to higher confidence
+#           Both entries have utility=3; entry with confidence=0.9 must win.
+# ---------------------------------------------------------------------------
+GD37=$(_make_fixture "tc-mm-37")
+mkdir -p "$GD37/developer"
+{
+    _learning_line_with_utility "conf-key" "pattern" "2026-01-01T00:00:00Z" "low conf" "0.5" "3"
+    _learning_line_with_utility "conf-key" "pattern" "2026-03-01T00:00:00Z" "high conf" "0.9" "3"
+} > "$GD37/developer/learnings.jsonl"
+
+_run "$GD37" --role developer > /dev/null 2>&1
+
+KEPT_CONF37=$(python3 -c "
+import json
+lines = [l.strip() for l in open('$GD37/developer/learnings.jsonl') if l.strip()]
+for e in (json.loads(l) for l in lines):
+    if e.get('key') == 'conf-key':
+        print(e.get('insight',''))
+        break
+" 2>/dev/null || echo "")
+
+if [ "$KEPT_CONF37" = "high conf" ]; then
+    _pass "TC-MM-37: dedup equal-utility falls back to confidence (higher confidence kept)"
+else
+    _fail "TC-MM-37: equal utility should fall back to confidence tiebreak" \
+        "kept_insight=${KEPT_CONF37@Q} (expected 'high conf')"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-38: dedup_learnings — entry with utility > 0 beats entry with utility=0
+#           (utility=0 is the default for entries missing the field; a positive
+#           utility entry should always replace a zero-utility one)
+# ---------------------------------------------------------------------------
+GD38=$(_make_fixture "tc-mm-38")
+mkdir -p "$GD38/developer"
+# Entry 1: utility=0 (default/neutral), written first
+# Entry 2: utility=2 (positive), written second with lower confidence
+{
+    python3 -c "
+import json
+print(json.dumps({'timestamp':'2026-01-01T00:00:00Z','role':'developer','type':'pattern','key':'zero-util','insight':'no utility field','confidence':0.9}))
+"
+    _learning_line_with_utility "zero-util" "pattern" "2026-03-01T00:00:00Z" "positive utility insight" "0.5" "2"
+} > "$GD38/developer/learnings.jsonl"
+
+_run "$GD38" --role developer > /dev/null 2>&1
+
+KEPT_INSIGHT38=$(python3 -c "
+import json
+lines = [l.strip() for l in open('$GD38/developer/learnings.jsonl') if l.strip()]
+for e in (json.loads(l) for l in lines):
+    if e.get('key') == 'zero-util':
+        print(e.get('insight',''))
+        break
+" 2>/dev/null || echo "")
+
+if [ "$KEPT_INSIGHT38" = "positive utility insight" ]; then
+    _pass "TC-MM-38: dedup: utility=2 beats utility=0 (missing field default)"
+else
+    _fail "TC-MM-38: positive utility should win over zero/default utility" \
+        "kept_insight=${KEPT_INSIGHT38@Q} (expected 'positive utility insight')"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-39: report_utility flags utility<=0 entries in --check/--verbose output
+#           Three entries: one utility=5 (positive), two with utility<=0.
+#           In --check mode, the report must mention the utility<=0 count and
+#           the keys of the low-utility entries.
+# ---------------------------------------------------------------------------
+GD39=$(_make_fixture "tc-mm-39")
+mkdir -p "$GD39/developer"
+{
+    _learning_line_with_utility "good-key"    "pattern"     "2026-01-01T00:00:00Z" "good insight"    "0.8" "5"
+    _learning_line_with_utility "zero-key"    "operational" "2026-01-01T00:00:00Z" "zero insight"    "0.7" "0"
+    _learning_line_with_utility "neg-key"     "pitfall"     "2026-01-01T00:00:00Z" "negative insight" "0.6" "-1"
+} > "$GD39/developer/learnings.jsonl"
+
+OUTPUT39=$(_run "$GD39" --role developer --check 2>&1)
+
+# Report must mention utility_le_0=2 (zero-key and neg-key)
+HAS_LE0_COUNT39=0
+echo "$OUTPUT39" | grep -q "utility_le_0=2" && HAS_LE0_COUNT39=1
+
+# Report must name the low-utility keys
+HAS_ZERO_KEY39=0
+echo "$OUTPUT39" | grep -q "zero-key" && HAS_ZERO_KEY39=1
+HAS_NEG_KEY39=0
+echo "$OUTPUT39" | grep -q "neg-key" && HAS_NEG_KEY39=1
+
+if [ "$HAS_LE0_COUNT39" -eq 1 ] && [ "$HAS_ZERO_KEY39" -eq 1 ] && [ "$HAS_NEG_KEY39" -eq 1 ]; then
+    _pass "TC-MM-39: report_utility flags utility<=0 entries in --check output"
+else
+    _fail "TC-MM-39: report_utility should surface utility<=0 keys in --check mode" \
+        "has_le0_count=$HAS_LE0_COUNT39 has_zero_key=$HAS_ZERO_KEY39 has_neg_key=$HAS_NEG_KEY39"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-40: report_utility in --check mode writes nothing (read-only contract)
+#           Confirm no new files appear in the role directory after report_utility.
+# ---------------------------------------------------------------------------
+GD40=$(_make_fixture "tc-mm-40")
+mkdir -p "$GD40/developer"
+{
+    _learning_line_with_utility "any-key" "pattern" "2026-01-01T00:00:00Z" "some insight" "0.8" "-1"
+} > "$GD40/developer/learnings.jsonl"
+
+# Snapshot files before run
+FILES_BEFORE40=$(ls "$GD40/developer/" 2>/dev/null | sort)
+
+_run "$GD40" --role developer --check > /dev/null 2>&1
+
+# Snapshot files after run (exclude .memory-baseline.json — baseline is NOT
+# written in --dry-run mode; however --check does NOT write it per TC-MM-33).
+FILES_AFTER40=$(ls "$GD40/developer/" 2>/dev/null | sort)
+
+# The only extra files that may appear in --check mode are lock files that
+# get cleaned up; learnings.jsonl must NOT have changed.
+LEARNINGS_HASH_BEFORE40=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD40/developer/learnings.jsonl','rb').read()).hexdigest())" 2>/dev/null)
+_run "$GD40" --role developer --check > /dev/null 2>&1
+LEARNINGS_HASH_AFTER40=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD40/developer/learnings.jsonl','rb').read()).hexdigest())" 2>/dev/null)
+
+if [ "$LEARNINGS_HASH_BEFORE40" = "$LEARNINGS_HASH_AFTER40" ]; then
+    _pass "TC-MM-40: report_utility in --check mode writes nothing to learnings.jsonl"
+else
+    _fail "TC-MM-40: report_utility must be read-only" \
+        "learnings.jsonl was modified by --check run"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-41: enforce_playbook_cap over-cap names lowest-utility candidates
+#           Playbook has 32 strategies (2 over cap=30); learnings has utility
+#           data for some.  The over-cap log must name the lowest-utility ones.
+# ---------------------------------------------------------------------------
+GD41=$(_make_fixture "tc-mm-41")
+mkdir -p "$GD41/developer"
+
+# Build a playbook with 32 strategies
+python3 -c "
+print('# Playbook')
+print()
+# strategies 0-29 are ordinary; 30 and 31 are the low-utility ones
+for i in range(30):
+    print('### strategy-' + str(i))
+    print('Some description.')
+    print()
+print('### low-util-alpha')
+print('This strategy has low utility.')
+print()
+print('### low-util-beta')
+print('This strategy also has low utility.')
+print()
+" > "$GD41/developer/playbook.md"
+
+# Learnings: link 'low-util-alpha' and 'low-util-beta' to negative utility
+{
+    _learning_line_with_utility "low-util-alpha" "pattern" "2026-01-01T00:00:00Z" "low utility alpha" "0.5" "-2"
+    _learning_line_with_utility "low-util-beta"  "pattern" "2026-01-01T00:00:00Z" "low utility beta"  "0.5" "-1"
+    # Add a high-utility entry for an unrelated key (should NOT appear in candidates)
+    _learning_line_with_utility "strategy-0"     "pattern" "2026-01-01T00:00:00Z" "strategy zero"     "0.8" "10"
+} > "$GD41/developer/learnings.jsonl"
+
+OUTPUT41=$(_run "$GD41" --role developer --check 2>&1)
+
+HAS_LOW_ALPHA41=0
+echo "$OUTPUT41" | grep -q "low-util-alpha" && HAS_LOW_ALPHA41=1
+HAS_LOW_BETA41=0
+echo "$OUTPUT41" | grep -q "low-util-beta" && HAS_LOW_BETA41=1
+HAS_CONSOLIDATOR_NOTE41=0
+echo "$OUTPUT41" | grep -qi "consolidator" && HAS_CONSOLIDATOR_NOTE41=1
+
+if [ "$HAS_LOW_ALPHA41" -eq 1 ] && [ "$HAS_LOW_BETA41" -eq 1 ] && [ "$HAS_CONSOLIDATOR_NOTE41" -eq 1 ]; then
+    _pass "TC-MM-41: enforce_playbook_cap over-cap names lowest-utility candidates with consolidator note"
+else
+    _fail "TC-MM-41: over-cap should surface low-utility candidates with consolidator note" \
+        "has_alpha=$HAS_LOW_ALPHA41 has_beta=$HAS_LOW_BETA41 has_consolidator_note=$HAS_CONSOLIDATOR_NOTE41"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-42: enforce_playbook_cap over-cap with --dry-run writes nothing
+#           (regression: the new retirement-candidate logging must not
+#            trigger any writes even when it reads learnings.jsonl)
+# ---------------------------------------------------------------------------
+GD42=$(_make_fixture "tc-mm-42")
+mkdir -p "$GD42/developer"
+
+python3 -c "
+print('# Playbook')
+print()
+for i in range(32):
+    print('### strategy-' + str(i))
+    print('Description.')
+    print()
+" > "$GD42/developer/playbook.md"
+
+{
+    _learning_line_with_utility "strategy-0" "pattern" "2026-01-01T00:00:00Z" "low" "0.5" "-1"
+} > "$GD42/developer/learnings.jsonl"
+
+LEARNINGS_HASH_BEFORE42=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD42/developer/learnings.jsonl','rb').read()).hexdigest())" 2>/dev/null)
+PLAYBOOK_HASH_BEFORE42=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD42/developer/playbook.md','rb').read()).hexdigest())" 2>/dev/null)
+
+EXIT42=$(_run "$GD42" --role developer --dry-run > /dev/null 2>&1; echo $?)
+
+LEARNINGS_HASH_AFTER42=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD42/developer/learnings.jsonl','rb').read()).hexdigest())" 2>/dev/null)
+PLAYBOOK_HASH_AFTER42=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD42/developer/playbook.md','rb').read()).hexdigest())" 2>/dev/null)
+
+if [ "$EXIT42" -eq 1 ] \
+        && [ "$LEARNINGS_HASH_BEFORE42" = "$LEARNINGS_HASH_AFTER42" ] \
+        && [ "$PLAYBOOK_HASH_BEFORE42" = "$PLAYBOOK_HASH_AFTER42" ]; then
+    _pass "TC-MM-42: enforce_playbook_cap over-cap with --dry-run writes nothing (exit 1)"
+else
+    _fail "TC-MM-42: --dry-run must not write any files even with retirement candidate logging" \
+        "exit=$EXIT42 learnings_changed=$([ "$LEARNINGS_HASH_BEFORE42" != "$LEARNINGS_HASH_AFTER42" ] && echo yes || echo no) playbook_changed=$([ "$PLAYBOOK_HASH_BEFORE42" != "$PLAYBOOK_HASH_AFTER42" ] && echo yes || echo no)"
 fi
 
 # ---------------------------------------------------------------------------

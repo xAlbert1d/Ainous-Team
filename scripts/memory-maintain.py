@@ -556,12 +556,22 @@ def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False
 
     Strategy detection: count H3 headings (### ) as strategy entries.
     This function REPORTS violations and logs them but does NOT auto-retire any
-    strategy — retirement requires consolidator judgment about which entries have
-    the lowest utility scores.  Returns False if cap exceeded so --check mode
-    reports it.
+    strategy — retirement requires consolidator judgment.  When over cap, it
+    ALSO surfaces the lowest-utility strategy names as suggested retirement
+    candidates by cross-referencing learnings.jsonl utility data.
 
-    The consolidator must retire lowest-scoring strategies manually when this
-    check fires.
+    Cross-reference logic:
+      - Parse strategy names from ### headings.
+      - For each strategy, look for a matching learnings.jsonl entry where the
+        key or insight text matches the strategy heading text (case-insensitive
+        substring match).  Use the latest utility value found for that strategy.
+      - Strategies with no learnings match default to utility=0 (neutral/untested).
+      - Sort strategies by (utility ASC, then name) to identify retirement candidates.
+      - Report the lowest-utility strategies (those with utility <= 0, or the
+        bottom excess+N group if none are negative) as suggested retirement set.
+
+    Retirement is ALWAYS the consolidator's call — this function only surfaces data.
+    Returns False if cap exceeded so --check mode reports it.
     """
     playbook_path = GROWTH_DIR / role / "playbook.md"
     if not playbook_path.exists():
@@ -574,7 +584,7 @@ def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False
         _log(f"enforce_playbook_cap({role}): cannot read playbook.md: {exc}", always=True)
         return False
 
-    strategies = [line for line in text.splitlines() if line.startswith("### ")]
+    strategies = [line[4:].strip() for line in text.splitlines() if line.startswith("### ")]
     count = len(strategies)
 
     if count <= PLAYBOOK_CAP:
@@ -582,10 +592,65 @@ def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False
         return True
 
     excess = count - PLAYBOOK_CAP
+
+    # Build a utility lookup from learnings.jsonl (fail-safe: errors are non-fatal)
+    strategy_utility: dict[str, int] = {}
+    try:
+        learnings_path = GROWTH_DIR / role / "learnings.jsonl"
+        if learnings_path.exists():
+            raw = learnings_path.read_text(encoding="utf-8")
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    entry_key = entry.get("key", "").lower()
+                    entry_insight = entry.get("insight", "").lower()
+                    entry_utility = entry.get("utility", 0) or 0
+                    # Match strategy name against key or insight (last-write wins per key)
+                    for strategy in strategies:
+                        strat_lower = strategy.lower()
+                        if strat_lower in entry_key or entry_key in strat_lower \
+                                or strat_lower in entry_insight:
+                            # Update if this entry has explicit utility data (non-zero)
+                            # or if we have no entry yet; last-write wins on ties
+                            existing = strategy_utility.get(strategy, None)
+                            if existing is None or entry_utility != 0:
+                                strategy_utility[strategy] = entry_utility
+                except (json.JSONDecodeError, ValueError):
+                    continue
+    except Exception as exc:  # pylint: disable=broad-except
+        _log(f"enforce_playbook_cap({role}): utility cross-reference failed (non-fatal): {exc}", verbose)
+
+    # Assign default utility=0 to strategies with no learnings match
+    for strategy in strategies:
+        if strategy not in strategy_utility:
+            strategy_utility[strategy] = 0
+
+    # Sort by utility (ascending), then name — lowest utility = retirement candidates
+    sorted_strategies = sorted(strategies, key=lambda s: (strategy_utility[s], s))
+
+    # Candidates: those with utility <= 0, bounded to at least (excess) entries
+    candidates_neg = [s for s in sorted_strategies if strategy_utility[s] <= 0]
+    # If not enough <= 0 entries to cover the excess, include the bottom excess entries
+    retirement_candidates = sorted_strategies[:max(excess, len(candidates_neg))][:excess + 5]
+
     # Report only — do NOT auto-retire (retirement is consolidator judgment).
     _log(f"enforce_playbook_cap({role}): {count} strategies exceeds cap {PLAYBOOK_CAP} "
          f"({excess} over limit) — playbook over cap; consolidator must retire lowest-scoring entries",
          always=True)
+    _log(
+        f"enforce_playbook_cap({role}): suggested retirement candidates (lowest-utility; "
+        f"RETIREMENT IS CONSOLIDATOR'S CALL — do not auto-retire):\n"
+        + "\n".join(
+            f"  - {s!r} (utility={strategy_utility[s]}, "
+            f"{'no learnings match' if strategy_utility[s] == 0 and s not in {k for k in strategy_utility if strategy_utility[k] != 0} else 'from learnings'})"
+            for s in retirement_candidates
+        ),
+        always=True,
+    )
+
     if dry_run:
         _log(f"[dry-run] would flag playbook cap violation for role={role}", always=True)
     return False  # Signal: action needed (manual consolidator retirement required)
@@ -597,13 +662,18 @@ def enforce_playbook_cap(role: str, dry_run: bool = False, verbose: bool = False
 
 
 def dedup_learnings(role: str, dry_run: bool = False, verbose: bool = False) -> bool:
-    """Deduplicate learnings.jsonl by (key, type) — keep highest-confidence entry.
+    """Deduplicate learnings.jsonl by (key, type) — keep highest-utility, then
+    highest-confidence entry.
 
-    When two entries share the same (key, type), the one with the higher
-    'confidence' value is kept.  If confidence values are equal (or absent),
-    recency (last-written) wins.  This preference for confidence is a deliberate
-    choice: a corroborated high-confidence entry is more valuable than a recent
-    low-confidence one.
+    Tiebreak order when two entries share the same (key, type):
+      1. Higher 'utility' wins (prefer the entry with more demonstrated value).
+      2. Equal utility → higher 'confidence' wins (corroborated entries preferred).
+      3. Equal utility AND equal confidence → last-write wins (recency).
+
+    The 'utility' field is a signed integer (negative = detrimental, 0 = neutral/
+    untested, positive = demonstrated value).  It defaults to 0 when absent so
+    pre-existing entries without the field sort at neutral and lose to any entry
+    with a positive utility.
 
     Lifted from consolidator-instructions.md §Learnings Pruning.
     Uses WAL-safe write under advisory lock.
@@ -644,20 +714,27 @@ def dedup_learnings(role: str, dry_run: bool = False, verbose: bool = False) -> 
                  f"— file may be corrupt; skipping to avoid data loss", always=True)
             return False
 
-        # Keep highest-confidence entry for each (key, type) pair.
-        # Prefer confidence over recency; when confidence is equal, last-write wins
-        # (last seen in the file wins because we iterate in order).
+        # Keep best entry for each (key, type) pair.
+        # Tiebreak: highest utility > highest confidence > last-write (recency).
         seen: dict[tuple, dict] = {}
         for entry in entries:
             k = (entry.get("key", ""), entry.get("type", ""))
             if k not in seen:
                 seen[k] = entry
             else:
+                existing_utility = seen[k].get("utility", 0) or 0
+                new_utility = entry.get("utility", 0) or 0
                 existing_conf = seen[k].get("confidence", 0.0) or 0.0
                 new_conf = entry.get("confidence", 0.0) or 0.0
-                if new_conf >= existing_conf:
-                    # Equal confidence → last-write wins; higher → always replace
+                if new_utility > existing_utility:
+                    # New entry has higher utility — always prefer it
                     seen[k] = entry
+                elif new_utility == existing_utility:
+                    # Equal utility → fall back to confidence tiebreak;
+                    # equal confidence → last-write wins (>= replaces existing)
+                    if new_conf >= existing_conf:
+                        seen[k] = entry
+                # else: existing has higher utility — keep it (do nothing)
 
         deduped = list(seen.values())
         removed = len(entries) - len(deduped)
@@ -675,6 +752,121 @@ def dedup_learnings(role: str, dry_run: bool = False, verbose: bool = False) -> 
         return _wal_write(learnings_path, content)
     finally:
         _release_advisory_lock(lock_path, lock_fd)
+
+
+# ---------------------------------------------------------------------------
+# 3b. report_utility(role, dry_run, verbose)
+# ---------------------------------------------------------------------------
+
+# Number of lowest-utility entries to surface as retirement candidates in the report.
+UTILITY_REPORT_BOTTOM_N = 5
+
+
+def report_utility(role: str, dry_run: bool = False, verbose: bool = False) -> bool:
+    """Report utility statistics from learnings.jsonl (read-only; no file writes).
+
+    Aggregates per-(key, type) utility: uses the LATEST utility value per key
+    (last-write-wins, consistent with dedup_learnings recency rule).  Utility
+    is a signed integer: negative = detrimental/unused, 0 = neutral/untested,
+    positive = demonstrated value.  Entries missing the 'utility' field are
+    treated as utility=0.
+
+    Assumption: utility is the CURRENT stated value for a key, not a running
+    sum, because the schema initialises it at 0 and the consolidator updates it
+    in-place on documented events.  Summing across duplicate keys before dedup
+    would double-count; reporting the latest value per key (post-dedup) is the
+    conservative and consistent choice.
+
+    Emitted via _log(always=True) in --check mode or when verbose=True;
+    in normal (non-verbose) live mode, the report is suppressed to avoid noise.
+
+    Retirement candidates are surfaced as the lowest-utility keys (utility <= 0
+    or bottom-N if fewer than UTILITY_REPORT_BOTTOM_N are negative).  No data
+    is modified.  No lock is needed for a read-only scan; the function is
+    fail-safe (any exception is caught and logged).
+
+    Returns True always (report is advisory; failures are non-fatal).
+    """
+    should_report = dry_run or verbose
+    try:
+        learnings_path = GROWTH_DIR / role / "learnings.jsonl"
+        if not learnings_path.exists():
+            _log(f"report_utility({role}): learnings.jsonl not found — skipping", verbose)
+            return True
+
+        try:
+            raw = learnings_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"report_utility({role}): cannot read learnings.jsonl: {exc}", always=True)
+            return True  # Fail-safe: non-fatal
+
+        # Build per-(key, type) record: latest utility + count of entries seen
+        # (last-write-wins matches the dedup_learnings recency tiebreak)
+        seen_utility: dict[tuple, int] = {}    # (key, type) → latest utility
+        seen_count: dict[tuple, int] = {}      # (key, type) → total entries (pre-dedup)
+
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                k = (entry.get("key", ""), entry.get("type", ""))
+                utility = entry.get("utility", 0)
+                utility = utility if isinstance(utility, (int, float)) else 0
+                utility = int(utility)
+                # Last-write wins for utility value
+                seen_utility[k] = utility
+                seen_count[k] = seen_count.get(k, 0) + 1
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        total_entries = len(seen_utility)
+        if total_entries == 0:
+            _log(f"report_utility({role}): learnings.jsonl is empty or all lines malformed", verbose)
+            return True
+
+        # Aggregate: count entries with utility <= 0
+        zero_or_neg = [(k, u) for k, u in seen_utility.items() if u <= 0]
+        count_zero_or_neg = len(zero_or_neg)
+
+        # Identify retirement candidates: bottom-N by utility, then by key name
+        all_sorted = sorted(seen_utility.items(), key=lambda item: (item[1], item[0]))
+        # Surface utility<=0 entries, or at least UTILITY_REPORT_BOTTOM_N entries
+        bottom_n_cutoff = max(count_zero_or_neg, UTILITY_REPORT_BOTTOM_N)
+        retirement_candidates = all_sorted[:bottom_n_cutoff]
+
+        if should_report:
+            candidate_lines = "\n".join(
+                f"    key={k!r} type={t!r} utility={u} "
+                f"(seen {seen_count.get((k, t), 1)}x before dedup)"
+                for (k, t), u in retirement_candidates
+            )
+            _log(
+                f"report_utility({role}): utility report — "
+                f"total_unique_keys={total_entries} "
+                f"utility_le_0={count_zero_or_neg}\n"
+                f"  Lowest-utility entries (consolidator retirement candidates — "
+                f"RETIREMENT IS CONSOLIDATOR'S CALL):\n"
+                f"{candidate_lines}",
+                always=True,
+            )
+        else:
+            # Quiet mode: emit a single summary line at verbose level
+            _log(
+                f"report_utility({role}): {total_entries} unique keys; "
+                f"{count_zero_or_neg} with utility<=0",
+                verbose,
+            )
+
+    except Exception as exc:  # pylint: disable=broad-except
+        # Fail-safe: utility report must never abort memory-maintain
+        _log(
+            f"report_utility({role}): unexpected error (non-fatal): {exc}",
+            always=True,
+        )
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1661,10 @@ def main() -> int:
 
             ok = dedup_learnings(role, dry_run=dry_run, verbose=verbose)
             all_ok = all_ok and ok
+
+            # report_utility is read-only — always runs, but only emits the full
+            # report in --check/--verbose mode (quiet in normal live runs).
+            report_utility(role, dry_run=dry_run, verbose=verbose)
 
             ok = prune_orphan_learnings(role, dry_run=dry_run, verbose=verbose)
             all_ok = all_ok and ok
