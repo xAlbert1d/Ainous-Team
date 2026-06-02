@@ -63,6 +63,7 @@ COVERED_FILES=(
     "hooks/write-proxy"
     "hooks/spawn-telemetry"
     "hooks/taint-flag"
+    "hooks/webfetch-injection-detector"
     "hooks/skill-telemetry"
     "hooks/session-start"
     "hooks/session-end"
