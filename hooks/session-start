@@ -5,6 +5,107 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Plugin self-integrity check (P0-2, OWASP ASI04 — agentic supply-chain).
+#
+# Recompute SHA-256 of each file listed in ${CLAUDE_PLUGIN_ROOT}/hooks/manifest.sha256
+# and compare to the committed baseline. On ANY mismatch / missing file, emit a
+# prominent stderr warning AND append to ~/.claude/.ainous-integrity.log naming
+# the offending file(s). DETECTION + ALERT ONLY — fail-OPEN, never blocks the
+# session (a false positive must not brick the user).
+#
+# HONESTY: this is tamper-EVIDENCE, not tamper-PROOFing. An attacker who can
+# rewrite the plugin cache can also rewrite THIS verifier and the manifest to
+# match their swapped files, defeating the check entirely. It still raises the
+# bar and catches the most likely cases: a single hook swapped (e.g.
+# authority-enforce.sh) without the manifest also rewritten, accidental
+# corruption, and incomplete supply-chain substitution. Hard-fail enforcement
+# (authority-enforce.sh refusing on integrity failure) is a deliberately-deferred
+# stronger follow-up — not done here to avoid bricking on false positives.
+#
+# The whole block runs inside a guarded group with `|| true` so that nothing
+# here (set -e, a missing tool, a permission error) can ever abort session-start.
+# FD 3 is duped from the real stderr so the warning banner survives the block's
+# own `2>/dev/null` noise-suppression and still reaches the operator's terminal.
+# ---------------------------------------------------------------------------
+exec 3>&2
+{
+    _INTEGRITY_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+    _INTEGRITY_MANIFEST="${_INTEGRITY_PLUGIN_ROOT}/hooks/manifest.sha256"
+    _INTEGRITY_LOG="${HOME}/.claude/.ainous-integrity.log"
+
+    if [ -n "$_INTEGRITY_PLUGIN_ROOT" ] && [ -f "$_INTEGRITY_MANIFEST" ]; then
+        # Pick a SHA-256 tool: shasum (macOS/BSD) -> sha256sum (Linux).
+        _integrity_tool=""
+        if command -v shasum >/dev/null 2>&1; then
+            _integrity_tool="shasum"
+        elif command -v sha256sum >/dev/null 2>&1; then
+            _integrity_tool="sha256sum"
+        fi
+
+        _integrity_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "?"; }
+
+        if [ -z "$_integrity_tool" ]; then
+            # No hashing tool — log a note and skip (graceful degradation).
+            printf '[%s] integrity: SKIPPED — no shasum/sha256sum available\n' \
+                "$(_integrity_now)" >> "$_INTEGRITY_LOG" 2>/dev/null || true
+        else
+            _integrity_mismatches=""
+            # Read manifest lines: "<sha256>  <relative-path>". Skip blanks and
+            # comment lines (those starting with '#').
+            while IFS= read -r _ln || [ -n "$_ln" ]; do
+                case "$_ln" in
+                    ''|'#'*) continue ;;
+                esac
+                _want="${_ln%% *}"          # first field = expected digest
+                _rel="${_ln#* }"            # remainder after first space...
+                _rel="${_rel#"${_rel%%[![:space:]]*}"}"  # ...left-trimmed
+                [ -n "$_want" ] && [ -n "$_rel" ] || continue
+
+                _target="${_INTEGRITY_PLUGIN_ROOT}/${_rel}"
+                if [ ! -f "$_target" ]; then
+                    _integrity_mismatches+="  MISSING : ${_rel}"$'\n'
+                    continue
+                fi
+                if [ "$_integrity_tool" = "shasum" ]; then
+                    _got="$(shasum -a 256 "$_target" 2>/dev/null | awk '{print $1}')"
+                else
+                    _got="$(sha256sum "$_target" 2>/dev/null | awk '{print $1}')"
+                fi
+                if [ -z "$_got" ]; then
+                    _integrity_mismatches+="  UNHASHABLE : ${_rel}"$'\n'
+                elif [ "$_got" != "$_want" ]; then
+                    _integrity_mismatches+="  MODIFIED : ${_rel}"$'\n'
+                fi
+            done < "$_INTEGRITY_MANIFEST"
+
+            if [ -n "$_integrity_mismatches" ]; then
+                # Prominent, hard-to-miss stderr banner.
+                {
+                    printf '\n'
+                    printf '!! ===================================================================== !!\n'
+                    printf '!!  AINOUS-TEAM SECURITY WARNING — PLUGIN INTEGRITY CHECK FAILED          !!\n'
+                    printf '!! ===================================================================== !!\n'
+                    printf '!!  One or more security-critical plugin files do NOT match the signed    !!\n'
+                    printf '!!  manifest (hooks/manifest.sha256). The plugin may have been tampered   !!\n'
+                    printf '!!  with, corrupted, or partially updated. Affected file(s):              !!\n'
+                    printf '%s' "$_integrity_mismatches"
+                    printf '!!  Logged to: %s\n' "$_INTEGRITY_LOG"
+                    printf '!!  Note: this is tamper-EVIDENCE only and does NOT block the session.    !!\n'
+                    printf '!! ===================================================================== !!\n\n'
+                } >&3 || true
+                # Persist to the integrity log.
+                {
+                    printf '[%s] integrity: MISMATCH under %s\n' \
+                        "$(_integrity_now)" "$_INTEGRITY_PLUGIN_ROOT"
+                    printf '%s' "$_integrity_mismatches"
+                } >> "$_INTEGRITY_LOG" 2>/dev/null || true
+            fi
+        fi
+    fi
+} 2>/dev/null || true
+exec 3>&-
+
+# ---------------------------------------------------------------------------
 # First-run detection: prompt user to initialize if ainous-roles is missing
 # ---------------------------------------------------------------------------
 ROLES_DIR="${HOME}/.claude/ainous-roles"
