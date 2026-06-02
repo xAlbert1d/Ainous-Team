@@ -11,7 +11,7 @@ Run the periodic team review process. This combines 1-on-1 growth reviews, team 
 ## Steps
 
 1. Check when the last review was: read `.claude/ainous-roles/coordinator/reviews.md` for the most recent `## Review:` entry date
-2. Read `${CLAUDE_PLUGIN_ROOT}/skills/team-review-periodic/SKILL.md` for the full review methodology
+2. Read `${CLAUDE_PLUGIN_ROOT}/commands/team-review-periodic.md` for the full review methodology
 3. Follow the skill's 4-part process: Individual Growth -> Team Dynamics -> Coordinator Self-Assessment -> Action Items
 4. Write the review report to `.claude/ainous-roles/coordinator/reviews.md`
 5. Present a summary to the user

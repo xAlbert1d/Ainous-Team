@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 57 skills, that learn and improve over time. v5.8.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 63 skills, that learn and improve over time. v5.17.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -104,8 +104,9 @@ The coordinator has Write/Bash for journal writes but delegates all implementati
 ainous-team plugin
 |-- 12 agents        -- coordinator, developer, architect, code-quality, tester,
 |                       researcher, writer, security, authority, consolidator, retriever, signal
-|-- 57 skills        -- 3 orchestration + 54 domain-expertise (see Skills Vault below)
-|-- 5 commands       -- /team-status, /team-history, /team-alerts, /team-retro, /team-signal
+|-- 63 skills        -- domain-expertise (see Skills Vault below)
+|-- 8 commands       -- /team-status, /team-history, /team-alerts, /team-retro, /team-signal,
+|                       /team-review, /team-review-periodic, /team-implement
 |-- 2 hooks          -- SessionStart (context injection), PreToolUse (enforcement)
 |-- enforcement      -- script-based Write/Edit/Bash gating (fail-closed, allowlist-based)
 \-- runtime charter  -- shared execution semantics injected into every role spawn
@@ -134,7 +135,7 @@ The team implements patterns from recent harness engineering research:
 | **Exploration force** | [Meta-Harness](https://yoonholee.com/meta-harness/) | Consolidator injects `[experimental]` strategies with maturity-decaying rate |
 | **Soft enforcement** | Original | Main session gets NOTE when writing directly in coordinator-as-default mode |
 | **Failure taxonomy** | NLAH + Anthropic | 7 named failure modes with prescribed recovery actions |
-| **Skills vault** | Original + gstack + community | 57 skills across 10 domains, assigned at spawn, invoked autonomously by roles |
+| **Skills vault** | Original + gstack + community | 63 skills across 10 domains, assigned at spawn, invoked autonomously by roles |
 | **Session event log** | Anthropic Managed Agents | 7 event types in task-history.jsonl; enables crash recovery |
 | **Knowledge lint** | Karpathy LLM Wiki | Consolidator detects contradictions and orphans across knowledge stores |
 | **Structured retrieval tags** | MemPalace | Journal entries tagged by task-type and area; retriever pre-filters |
@@ -184,17 +185,11 @@ Topologies compose phases: `full-pipeline: [research, design, implement, test, r
 
 ### Skills Vault
 
-57 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
+63 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
 
-**Orchestration skills (3):**
+The three pipeline-orchestration commands (`/team-implement`, `/team-review`, `/team-review-periodic`) were commands all along and now live in `commands/`.
 
-| Skill | Description |
-|-------|-------------|
-| **team-implement** | End-to-end feature pipeline: research, design, code, test, review |
-| **team-review** | Multi-angle review pipeline: security + quality + architecture |
-| **team-review-periodic** | Periodic team health review: 1-on-1s, dynamics retro, coordinator self-assessment |
-
-**Domain-expertise skills (48):**
+**Domain-expertise skills (63):**
 
 | Category | Skills |
 |----------|--------|
@@ -206,7 +201,12 @@ Topologies compose phases: `full-pipeline: [research, design, implement, test, r
 | **Research & Analysis** | deep-research, knowledge-structure, source-validate, competitive-intel |
 | **Writing & Content** | scqa, content-repurpose, tone-enforce, summarize, copywriting, docs, present |
 | **Visual & Design** | diagram, infographic, flowchart, ui-layout |
+| **Image Generation** | codex-image-gen, image-craft-base, image-hero, image-icon, image-texture, image-background, image-social-card, image-thumbnail, image-illustration |
 | **Video & Media** | video-script, video-edit, caption-format |
+
+An `image-*` family (image-hero, -icon, -texture, -background, -social-card, -thumbnail, -illustration, + shared image-craft-base) authors gpt-image-2 prompts for different artifact types.
+
+`codex-image-gen` (the execution layer the image-* skills hand off to) is now BUNDLED in the plugin. It drives the OpenAI Codex CLI / gpt-image-2 — so it works for anyone who has the Codex desktop app (or `codex` CLI) installed and authenticated; no separate image-API key needed. Without Codex installed, the image-* skills still author correct prompts but cannot execute the generation.
 
 Review ordering is two-stage: spec compliance before quality (catches structural misses before style nits).
 
@@ -349,6 +349,108 @@ ainous-team/                             <-- the plugin
 \-- ... (per-role journals + memory)
 ```
 
+## What's new in v5.17.0
+
+Bundles the `codex-image-gen` execution-layer skill into the plugin, making the image-* family self-contained. Any installer who has the Codex desktop app or `codex` CLI installed and authenticated can now generate images without a separate API key — `codex-image-gen` drives the OpenAI Codex CLI / gpt-image-2 and is no longer an external prerequisite. Previously, installers had to obtain and configure `codex-image-gen` separately; that step is now gone. Skill count moves from 62 to 63.
+
+## What's new in v5.16.0
+
+Restores three media skills trimmed in an earlier focus pass: `video-script`, `video-edit`, and `caption-format` are back at the user's request, re-wired to the writer role's `conditional_skills` and keywords. A new **Video & Media** row appears in the Skills Vault table alongside the existing Image Generation family. Skill count moves from 59 to 62.
+
+## What's new in v5.15.0
+
+Adds an 8-skill `image-*` family for generating gpt-image-2 artifacts: image-hero, image-icon, image-texture, image-background, image-social-card, image-thumbnail, image-illustration, and the shared image-craft-base. Each skill authors prompts per a 5-section template (subject, style, lighting/texture, composition, output constraints) and hands off to an external `codex-image-gen` execution layer (drives the OpenAI Codex CLI / gpt-image-2) — install that skill and Codex CLI separately, they are not bundled. Craft constraints such as no-transparency, verbatim-text avoidance, and seamless-tiling rules are encoded per artifact type in the individual skills. Also corrects a pre-existing skill-count drift: the plugin was labeled 54 skills across several doc surfaces; the verified count after counting `skills/*/SKILL.md` is 59.
+
+## What's new in v5.14.1
+
+Install correctness and a fully-green test suite. **Fresh-install fix:** `scripts/setup.sh` now
+initializes the complete 4-file role scaffold — it previously created only `playbook.md` + `growth.json`
+(universal, `~/.claude/ainous-roles/`) and never the `journal.md` + `learnings.jsonl` (project,
+`.claude/ainous-roles/`) that the release gate `verify-role-infrastructure.sh` requires, so a fresh
+install could never pass the plugin's own Gate 1. Setup is idempotent (never clobbers existing memory).
+With this, all six pre-ship gates pass after a clean install. **Test-suite repair:** the bats suite is now
+fully green (159/159, 2 intentional skips). The `authority-enforce.bats` harness now establishes a valid
+session + taint-nonce context the way the real `session-start` hook does (9 tests were failing because the
+hook correctly fail-closed on an unfaithful harness — not a plugin bug); two tests with stale expectations
+were aligned to current S-2 behavior. The `verify-artifact.sh` fallback YAML parser (used when PyYAML is
+absent) was fixed — a block-list key was initialized to `None` instead of `[]`, silently dropping all list
+items and making section/frontmatter enforcement a no-op without PyYAML.
+
+## What's new in v5.14.0
+
+Closes the research-sourced improvement backlog (`docs/REFERENCES.md`), in two waves.
+
+**P1 — learning-loop & governance hardening.** The consolidator now runs a **semantic-taint corroboration
+gate** (NeuroTaint): a learning that originates from a taint-flagged session is not promoted to
+`verified` until an independent, untainted session corroborates it — taint no longer launders into trusted
+memory. A **utility validation gate** (Darwin Gödel Machine) replaces "promote because it sounds useful"
+with "keep because utility held or improved": `scripts/memory-maintain.py` now surfaces per-strategy
+utility data (lowest-utility candidates, dedup prefers higher utility), and the consolidator keeps a
+promoted strategy only if its utility trend stays non-negative over N sessions. Coordinator **synthesis**
+now weights by argument/evidence quality and explicitly surfaces the highest-confidence dissenting view —
+consensus is no longer treated as a correctness signal (NeurIPS 2025: single-line anti-conformity is
+necessary but not sufficient; the existing injection is retained).
+
+**P2 — boundary & lifecycle.** A new **WebFetch/WebSearch injection detector** hook scans fetched/searched
+content for indirect-prompt-injection patterns (instruction override, role/turn injection, fake tool-call
+blocks, hidden HTML-comment directives, base64 instruction blobs) and annotates the context with a warning
+plus a forensic log. It is honestly a **detector, not a sanitizer** — a PostToolUse hook cannot reliably
+rewrite tool output in a version-agnostic way, so rather than overclaim, it warns and leaves taint-tagging
+as the second line; older Claude Code that drops the annotation still gets the taint gate and the forensic
+log. New **SubagentStop observability** logs `background_tasks`/`session_crons` counts (newer-CC fields,
+absent-tolerant) to task-history for lifecycle visibility.
+
+## What's new in v5.13.0
+
+Two defensive features informed by 2026 domain research (`docs/REFERENCES.md`), both protecting against
+things outside the plugin's direct control. First, **external-memory-mutation detection**:
+`scripts/memory-maintain.py` now keeps a per-role baseline (sha256 + line count) of its managed memory
+files and warns loudly when a file changed since the last ainous-team write — surfacing silent edits by
+background platform agents such as Claude Code's AutoDream consolidator (whose scan scope over
+`.claude/ainous-roles/` is undocumented), including a heuristic note when a file is pruned to AutoDream's
+200-line index limit. It is detection, not prevention — we cannot stop a platform agent from editing
+files, but the consolidator/operator is now alerted to review. A harmless protective header marks managed
+markdown files (never JSONL). Second, **hook-script integrity** (OWASP ASI04, agentic supply chain): a
+committed SHA-256 manifest (`hooks/manifest.sha256`, generated by `scripts/gen-hook-manifest.sh`) covers
+the security-critical hooks and scripts, and `hooks/session-start` verifies them at load, emitting a
+prominent tamper-evidence warning on any mismatch — fail-open, so a false positive never bricks a session.
+A new pre-ship **Gate 6** keeps the manifest current. This is tamper-EVIDENCE, not tamper-proofing: an
+attacker who can rewrite the plugin cache can also rewrite the verifier and manifest; it catches the more
+likely single-file substitution, partial supply-chain tampering, and accidental corruption.
+
+## What's new in v5.12.1
+
+Maintenance and enforcement-hygiene release closing the last of the architecture-review backlog. The
+cold-storage archive files (`sessions-archive.jsonl`, `decisions-archive.md`) are now capped by
+`scripts/memory-maintain.py` — capping the hot session array in v5.11.0 had merely moved the
+unbounded-growth problem one file downstream; the archives now keep the most recent N entries (500
+sessions / 200 decision blocks) and drop the oldest, WAL-safe. A new pre-ship **Gate 5**
+(`scripts/verify-model-consistency.sh`) mechanically asserts that each role's authoritative
+`agents/<role>.md` model frontmatter matches its `capabilities/<role>.json` value, catching the
+dual-source drift we previously had to manage by hand. Finally, the NORMATIVE-vs-ENFORCED appendix in
+`CLAUDE-DESIGN.md` is brought current — the memory caps, dedup/prune, decision rotation, stale-fact
+flagging, index integrity, trust-level audit, archive capping, and model-consistency check are now
+correctly classified ENFORCED, with the genuinely judgment-bound mechanisms (strategy retirement,
+trust raising, poisoned-memory promotion) explicitly marked as intentionally permanent NORMATIVE.
+
+## What's new in v5.12.0
+
+A correctness, hardening, and backlog-clearing release driven by a post-release adversarial audit of v5.11.0's own code. The headline fix: `verify_index_integrity` in `scripts/memory-maintain.py` was silently destroying valid knowledge-index entries on every session end — it removed an entire line when any single link on it was broken, and resolved relative links against the wrong base directory. It now removes only the broken link substring, resolves links against the index file's own directory, and refuses to write an index that would shrink by more than 30% (fail-safe). The script's advisory lock, previously held by only one of six mutating functions, now covers all of them; all-malformed JSONL files are detected rather than silently reported as clean; and the changelog/docstring no longer overclaim the playbook cap as mechanically enforced (it is report-only — retirement remains consolidator judgment). This release also adds a **trust-level audit**: `authority-enforce.sh` reads `trust.level` from `growth.json` as its fail-closed authorization input, but that value was previously set only by consolidator prose. `memory-maintain.py` now mechanically clamps any `trust.level` that exceeds what a role's own session history justifies (fail-safe — it only ever lowers trust, never raises it, and never clamps on uncertain data), gated as a new pre-ship check (Gate 4); the `growth.json` trust subtree is added to the provenance-gated surfaces as defense-in-depth. Finally, several long-standing backlog items are closed: the write-proxy hook timeout was 3000 seconds (50 minutes) and is now 30; a dead `$?` check let malformed artifact manifests pass validation; the `spawn.json` event schema (which declared fields the hook never emits) was aligned to reality; the `growth.json` read-modify-write in the session-end hook is now flock-protected against parallel-pane races; the session-start GC sweep no longer launches one Python interpreter per file; and `spawn-telemetry` passes its payload via a tempfile rather than argv (avoiding an ARG_MAX failure on large prompts).
+
+## What's new in v5.11.0
+
+A set of instruction-design refinements that let the team take fuller advantage of capable, large-context models (Opus 4.8 and later) without weakening behavior on older Claude Code versions or smaller-context / lower-tier models. Every change degrades gracefully — better when the model is strong, still correct when it is not. The context-degradation ladder (`runtime-charter.md`) is preserved in full but now triggers on an explicit coordinator signal or observed tool/error pressure rather than a role's self-estimated context fill, so large-context sessions stay at peak exploration while small-context roles keep the guardrails. Spawn verbosity defaults are now tier-conditional — `coaching` for haiku-tier or unknown-tier roles, `supporting` for sonnet/opus-tier — instead of a blanket default, so weaker models keep step-by-step scaffolding and capable models get less noise. Keyword-based routing remains the baseline mechanism (the keyword arrays are untouched), with an additive semantic-override escape hatch the coordinator may use for ambiguous or stale matches, recorded in the routing-decision event. The consolidator's journal compaction retains the last 15 raw entries (up from 5) for richer pattern detection — consolidator read-depth only, not per-spawn context — and its strategy-absorption retirement check now runs every cycle for Shu-maturity strategies and records the model identifier at retirement, making retirements version-traceable so archived strategies can be selectively reinstated if a weaker model is later adopted. Anti-conformity injection for parallel reviewers is unchanged — it becomes more reliable on stronger models, not less.
+
+## What's new in v5.10.0
+
+Two HIGH-severity security fixes ship in this release, both independently verified. S-1: `hooks/spawn-telemetry` now charset-validates and realpath-contains the per-spawn nonce path to `~/.claude/teams` before writing — an attacker-controlled `team_name` or `teammate_name` in a spawn event could previously escape the teams directory via path traversal and write to arbitrary filesystem locations; the hook now fails open (telemetry skipped) on any path that does not resolve within the expected tree. S-2: `hooks/write-proxy` tightens the HMAC nonce lookup across all four identity-resolution tiers so the lookup is bound to the matched spawn event's names, never to caller-supplied `tool_input` fields; `_find_spawn_event` was switched from OR-matching to AND-matching on name fields; and Tier-1 now rejects mismatches between the envelope's claimed name and the matched event — closing a cross-teammate nonce-redirection bypass of the C-2 HMAC gate. A third wiring fix (Q-12): `WebFetch`/`WebSearch` are now wired into the `authority-enforce` PreToolUse matcher for the teammate block introduced in v5.9.3 — the check was registered in the script but the tool-name branch was never reached in practice, so the block never ran. One residual accepted as MEDIUM: the O_TRUNC nonce overwrite on crash-recovery re-spawn (R-nonce-clobber) is documented but not patched, as the fix requires disabling crash recovery for the spawner; the worst-case outcome is a self-defeating DoS by an already-trusted spawner.
+
+Mechanical memory enforcement is new in v5.10.0 via `scripts/memory-maintain.py`. Memory caps, learnings dedup and orphan-prune, expired-decision rotation, stale-fact flagging, and knowledge-index integrity were previously enforced only as consolidator prompt instructions, meaning they silently did not run if consolidation was skipped and memory grew unbounded. The script is now invoked fail-open from the SessionEnd hook and checked in the pre-ship gate. It ships with a `--check`/`--dry-run` mode and a 16-case test suite in `tests/test-memory-maintain.sh`.
+
+The consolidator and researcher roles are re-tiered to `opus` using family aliases, so any Claude Code version resolves them to its latest available model without version pinning. A new `docs/NEWER-MODELS.md` documents opt-in enhancements for Claude Code versions that support `effort:` frontmatter, `opusplan`, or `opus[1m]` context windows — the plugin remains model- and version-agnostic and none of these are required.
+
+Package cleanup reduced the distributable: three command-orchestration docs (`team-review`, `team-review-periodic`, `team-implement`) moved from `skills/` to `commands/` where they belong; three off-mission content skills (`video-script`, `video-edit`, `caption-format`) removed; the Flutter pm-client companion app extracted out of the package into a sibling directory; a dead Layer-2 audit script and an unused template removed. Skill count went from 57 to 54. The `confidence-calibration` skill was promoted to `default_skills` across 10 roles, and the duplicated Startup Sequence text was consolidated into a single runtime-charter reference.
+
 ## What's new in v5.2.0–v5.8.0
 
 v5.8.0 ships two coordinated security changes. First, the Clinejection defense (scope-reduction-on-taint): when a session is tainted by a WebFetch/WebSearch call, the enforcement hook now applies a reduced-capability profile — Bash is restricted to a read-only allowlist and Write/Edit are restricted to the role's own paths and findings artifacts. This closes the gap where a poisoned agent retained full capabilities after fetching adversarial content. Second, Layer-2 contract-implied authorization was retired after 8 weeks of zero adoption: the scope field was hardcoded empty on every spawn event, making the enforcement block dead code. Deleting dead code reduces surface area; all authorization now flows through Layer-1 (project baselines) and Layer-3 (hardcoded baselines + decisions.md).
@@ -451,6 +553,15 @@ Built on patterns from:
 | [Karpathy LLM Wiki](https://github.com/karpathy/llm-wiki) | Knowledge lint pass (contradiction + orphan detection); topic-organized index |
 | [Anthropic Managed Agents](https://www.anthropic.com/engineering/building-effective-agents) (2026) | Session event log for crash recovery; "harnesses encode assumptions that go stale" |
 | [OEL/ERL](https://arxiv.org/abs/2603.xxxxx) | Strategy source tagging ([from-failure] vs [from-success]); heuristic format enforcement (When X, do Y, because Z) |
+
+## Getting the most out of newer models
+
+The plugin uses family aliases (`opus`/`sonnet`/`haiku`) and works on any Claude Code version and
+any Claude model. Newer models make the team work better automatically — nothing to configure.
+
+If you are on a Claude Code version that supports opt-in features such as `effort:` frontmatter,
+`opusplan`, or `opus[1m]`, see [`docs/NEWER-MODELS.md`](docs/NEWER-MODELS.md) for targeted tweaks
+you can apply role by role. Everything there is optional and reversible.
 
 ## Contributing
 

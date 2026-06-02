@@ -148,6 +148,15 @@ if not _provenance_common_loaded:
          r'(?:architect-design|researcher-findings|security-findings|code-quality-findings'
          r'|tester-plan|tester-results|signal-findings)[^/]*\.md$', 'md'),
         (r'\.claude/ainous-roles/team-sync/state/taint-flags/[^/]+\.jsonl$', 'jsonl'),
+        # Trust subtree (v5.11.0): growth.json is gated here as defense-in-depth against
+        # tool-surface trust escalation.  All LEGITIMATE writers (session-end hook,
+        # memory-maintain.py, consolidator Python snippets, coordinator sed-template) use
+        # DIRECT FILE I/O — they never go through the tool surface — so this pattern does NOT
+        # break any normal workflow.  A tool-surface Write/Edit to growth.json (which is the
+        # only path the provenance validator intercepts) is anomalous and should require a
+        # provenance block.  If any legitimate writer ever moves to the tool surface, remove
+        # this entry and document why in a comment here (follow-up item).
+        (r'\.claude/ainous-roles/[^/]+/growth\.json$', 'jsonl'),
     ]
 
     _REQUIRED_FIELDS = frozenset({'role', 'session', 'source', 'discovered', 'verified'})
@@ -208,6 +217,58 @@ def _log(msg):
             _f.write(f"[{ts}] write-proxy: {msg}\n")
     except OSError:
         pass
+
+# ---------------------------------------------------------------------------
+# S-2: path-traversal guards for nonce path construction.
+# These mirror the S-1 guards in spawn-telemetry.
+# ---------------------------------------------------------------------------
+_SAFE_NAME_RE_WP = re.compile(r'^[A-Za-z0-9._:()\-]+$')
+
+def _is_safe_path_component_wp(value):
+    """Return True iff value is safe to interpolate into a nonce file path.
+    Rejects: empty string, contains '/', '..', NUL byte, or leading '~'.
+    Requires: matches ^[A-Za-z0-9._:()-]+$
+    """
+    if not value:
+        return False
+    if '\x00' in value:
+        return False
+    if value.startswith('~'):
+        return False
+    if '/' in value or '..' in value:
+        return False
+    return bool(_SAFE_NAME_RE_WP.match(value))
+
+_TEAMS_ROOT_WP = os.path.realpath(os.path.expanduser("~/.claude/teams"))
+
+def _safe_nonce_path(team_name, teammate_name, tier_label):
+    """Build the nonce file path for (team_name, teammate_name) with containment checks.
+
+    Returns the nonce file path on success, or None on any validation failure
+    (logs the reason). Applies:
+      1. Charset validation (S-1/S-2 guard) on both name components.
+      2. realpath-containment: resolved path must be inside ~/.claude/teams.
+
+    This is the ONLY sanctioned constructor for nonce paths in write-proxy.
+    Tier-3 caller-name fallback must go through this function — residual risk
+    note: Tier-3 still uses caller-supplied tool_input fields; the containment
+    check here limits blast radius to files inside ~/.claude/teams, but a
+    compromised caller could still redirect to a different teammate's nonce file
+    within that subtree. Tier-1 (session_id → spawn event) is preferred and
+    derives names from the verified spawn event rather than raw caller input.
+    """
+    if not _is_safe_path_component_wp(team_name):
+        _log(f"S-2 nonce-path guard ({tier_label}): rejected unsafe team_name={team_name!r}")
+        return None
+    if not _is_safe_path_component_wp(teammate_name):
+        _log(f"S-2 nonce-path guard ({tier_label}): rejected unsafe teammate_name={teammate_name!r}")
+        return None
+    nonce_file = os.path.expanduser(f"~/.claude/teams/{team_name}/nonces/{teammate_name}.nonce")
+    nonce_file_real = os.path.realpath(nonce_file)
+    if not nonce_file_real.startswith(_TEAMS_ROOT_WP + os.sep) and nonce_file_real != _TEAMS_ROOT_WP:
+        _log(f"S-2 nonce-path guard ({tier_label}): nonce path {nonce_file_real!r} escapes teams root {_TEAMS_ROOT_WP!r}")
+        return None
+    return nonce_file
 
 def _is_overly_broad(pattern):
     """Mirror of authority-enforce.sh _is_overly_broad()."""
@@ -366,7 +427,14 @@ def _find_teammate_nonce_event_by_role(task_history_path, role, current_session_
     return None
 
 def _find_spawn_event(task_history_path, teammate_name, team_name):
-    """Find most recent spawn event matching teammate_name or team_name."""
+    """Find most recent spawn event matching teammate_name AND team_name (when both supplied).
+
+    S-2 security note: matching on OR allowed a cross-teammate redirect attack —
+    an attacker sharing the same team_name could find a different teammate's spawn
+    event via the team_name arm and read that teammate's nonce file.  The fix
+    requires BOTH teammate_name and team_name to match when both are non-empty.
+    When only one is supplied (rare legacy case), that single field is used.
+    """
     try:
         with open(task_history_path, encoding='utf-8') as f:
             lines = f.readlines()
@@ -377,11 +445,18 @@ def _find_spawn_event(task_history_path, teammate_name, team_name):
             ev = json.loads(line.strip())
             if ev.get('event') != 'spawn':
                 continue
-            # Match by teammate_name or team_name
-            if teammate_name and ev.get('teammate_name') == teammate_name:
-                return ev
-            if team_name and ev.get('team_name') == team_name:
-                return ev
+            # S-2 fix: require BOTH fields to match when both are provided.
+            # An attacker who knows only team_name cannot redirect to a different
+            # teammate's spawn event (and thereby a different teammate's nonce file).
+            if teammate_name and team_name:
+                if ev.get('teammate_name') == teammate_name and ev.get('team_name') == team_name:
+                    return ev
+            elif teammate_name:
+                if ev.get('teammate_name') == teammate_name:
+                    return ev
+            elif team_name:
+                if ev.get('team_name') == team_name:
+                    return ev
         except (json.JSONDecodeError, ValueError):
             continue
     return None
@@ -480,29 +555,60 @@ spawn_ev = None
 # --- Tier 1: session_id → most recent team_name-mode spawn event → nonce file ---
 # v5.7.0: raw nonce is no longer in task-history (write_proxy_nonce field removed).
 # Nonce file at ~/.claude/teams/<team>/nonces/<mate>.nonce (mode 0600) is canonical source.
+#
+# S-2 fix (Tier-1): nonce path is built exclusively from the MATCHED SPAWN EVENT's recorded
+# teammate_name/team_name — NOT from raw tool_input.  The previous `if not teammate_name:`
+# conditional-backfill only overwrote the caller-supplied names when they were absent, so a
+# caller who set tool_input.teammate_name to a victim's name would win and the nonce path
+# would read the victim's nonce file.
+#
+# Fixed model (matches Tier-3b): always extract event names first; if tool_input names are
+# set AND disagree with the event's recorded names, reject outright (mismatch = suspicious).
+# Downstream logging/audit uses the event names, never the caller-supplied names.
 if not nonce and session_id:
     t1_spawn = _find_spawn_event_by_session_id(hist_path, session_id)
     if t1_spawn is not None:
         spawn_ev = t1_spawn
-        # Backfill teammate_name / team_name from the spawn event for downstream use
-        if not teammate_name:
-            teammate_name = t1_spawn.get('teammate_name')
-        if not team_name:
-            team_name = t1_spawn.get('team_name')
-        # Read nonce from file — never from task-history (auth bypass fix)
-        if team_name and teammate_name:
-            t1_nonce_file = os.path.expanduser(
-                f"~/.claude/teams/{team_name}/nonces/{teammate_name}.nonce"
-            )
-            try:
-                with open(t1_nonce_file, encoding='utf-8') as _t1nf:
-                    t1_nonce = _t1nf.read().strip() or None
-                if t1_nonce:
-                    nonce = t1_nonce
-                    _log(f"nonce resolved via Tier 1 (session_id→spawn event→nonce file) "
-                         f"for session_id={session_id!r} teammate_name={teammate_name!r}")
-            except OSError as exc:
-                _log(f"Tier 1 nonce file read failed (team={team_name} mate={teammate_name}): {exc}")
+        # Always derive names from the verified spawn event — never from raw tool_input.
+        t1_event_teammate = t1_spawn.get('teammate_name')
+        t1_event_team     = t1_spawn.get('team_name')
+        # Reject-on-mismatch: if tool_input supplied names AND they disagree with the
+        # event's authoritative names, reject immediately.  Empty/absent tool_input
+        # names are fine (normal SendMessage path has neither field).
+        _t1_ti_name = tool_input.get("teammate_name") or tool_input.get("name") or None
+        _t1_ti_team = tool_input.get("team_name") or None
+        _t1_name_mismatch = (_t1_ti_name and t1_event_teammate and _t1_ti_name != t1_event_teammate)
+        _t1_team_mismatch = (_t1_ti_team and t1_event_team     and _t1_ti_team != t1_event_team)
+        if _t1_name_mismatch or _t1_team_mismatch:
+            _log(f"Tier 1 rejected: tool_input identity "
+                 f"(name={_t1_ti_name!r} team={_t1_ti_team!r}) disagrees with spawn event "
+                 f"(name={t1_event_teammate!r} team={t1_event_team!r}) for session_id={session_id!r}")
+        else:
+            # Backfill caller-visible identity for downstream logging/audit use only.
+            # Nonce path is keyed on the event names — not these backfilled values.
+            if not teammate_name:
+                teammate_name = t1_event_teammate
+            if not team_name:
+                team_name = t1_event_team
+            # Read nonce from file — never from task-history (auth bypass fix).
+            # S-2: path built from SPAWN EVENT names (authoritative), with charset
+            # validation + realpath containment as defense-in-depth against corrupted data.
+            if t1_event_team and t1_event_teammate:
+                t1_nonce_file = _safe_nonce_path(t1_event_team, t1_event_teammate, "Tier-1")
+                if t1_nonce_file is None:
+                    _log(f"Tier 1 nonce path rejected by S-2 guard "
+                         f"(event team={t1_event_team!r} mate={t1_event_teammate!r})")
+                else:
+                    try:
+                        with open(t1_nonce_file, encoding='utf-8') as _t1nf:
+                            t1_nonce = _t1nf.read().strip() or None
+                        if t1_nonce:
+                            nonce = t1_nonce
+                            _log(f"nonce resolved via Tier 1 (session_id→spawn event→nonce file) "
+                                 f"for session_id={session_id!r} event teammate_name={t1_event_teammate!r}")
+                    except OSError as exc:
+                        _log(f"Tier 1 nonce file read failed "
+                             f"(event team={t1_event_team} mate={t1_event_teammate}): {exc}")
 
 # --- Tier 2: envelope role → most recent teammate-nonce event keyed by role ---
 if not nonce and teammate_role:
@@ -529,30 +635,54 @@ if not nonce:
             _log(f"nonce resolved via Tier 3a (teammate-nonce event) for teammate_name={teammate_name!r}")
 
 if not nonce:
-    # Tier 3b: nonce file lookup via teammate_name/team_name from matching spawn event.
+    # Tier 3b: nonce file lookup via spawn event matched by caller-supplied identity.
+    # S-2 fix (fully closes S-2): nonce path is built exclusively from the MATCHED SPAWN
+    # EVENT's recorded teammate_name/team_name — NOT from raw tool_input — so the caller
+    # cannot choose which nonce file is read.  The caller can influence which spawn event
+    # is matched (by supplying teammate_name/team_name that match an event), but they
+    # cannot redirect the nonce read to a different teammate's file within the same team.
+    #
     # v5.7.0: raw nonce is no longer in spawn event (write_proxy_nonce field removed).
     # Nonce file at ~/.claude/teams/<team>/nonces/<mate>.nonce (mode 0600) is canonical.
+    #
+    # Residual after S-2 fix: none within the nonce path itself.  The existing charset +
+    # realpath-containment guards in _safe_nonce_path() are retained as defense-in-depth
+    # against corrupted spawn event data.
     t3b_spawn = _find_spawn_event(hist_path, teammate_name, team_name)
     if t3b_spawn is not None:
         spawn_ev = t3b_spawn
-        # Backfill identity from spawn event if still unknown
+        # Always derive names from the matched spawn event — never from raw tool_input.
+        # This is the key S-2 fix: caller-supplied teammate_name/team_name are used only
+        # to locate the spawn event; the nonce path is keyed on the event's recorded names.
+        t3b_event_teammate = t3b_spawn.get('teammate_name')
+        t3b_event_team     = t3b_spawn.get('team_name')
+        # Backfill caller-visible identity for downstream logging/audit use only
         if not teammate_name:
-            teammate_name = t3b_spawn.get('teammate_name')
+            teammate_name = t3b_event_teammate
         if not team_name:
-            team_name = t3b_spawn.get('team_name')
-    if team_name and teammate_name:
-        t3b_nonce_file = os.path.expanduser(
-            f"~/.claude/teams/{team_name}/nonces/{teammate_name}.nonce"
-        )
-        try:
-            with open(t3b_nonce_file, encoding='utf-8') as _t3bnf:
-                t3b_nonce_val = _t3bnf.read().strip() or None
-            if t3b_nonce_val:
-                nonce = t3b_nonce_val
-                _log(f"nonce resolved via Tier 3b (nonce file) for teammate_name={teammate_name!r}")
-        except OSError as exc:
-            _log(f"Tier 3b nonce file read failed (team={team_name} mate={teammate_name}): {exc}")
-    if not nonce and t3b_spawn is None:
+            team_name = t3b_event_team
+        if t3b_event_team and t3b_event_teammate:
+            # S-2: nonce path built from SPAWN EVENT names (authoritative), with
+            # charset validation + realpath containment as defense-in-depth.
+            t3b_nonce_file = _safe_nonce_path(t3b_event_team, t3b_event_teammate, "Tier-3b")
+            if t3b_nonce_file is None:
+                _log(f"Tier 3b nonce path rejected by S-2 guard "
+                     f"(event team={t3b_event_team!r} mate={t3b_event_teammate!r})")
+            else:
+                try:
+                    with open(t3b_nonce_file, encoding='utf-8') as _t3bnf:
+                        t3b_nonce_val = _t3bnf.read().strip() or None
+                    if t3b_nonce_val:
+                        nonce = t3b_nonce_val
+                        _log(f"nonce resolved via Tier 3b (spawn-event names→nonce file) "
+                             f"for event teammate_name={t3b_event_teammate!r}")
+                except OSError as exc:
+                    _log(f"Tier 3b nonce file read failed "
+                         f"(event team={t3b_event_team} mate={t3b_event_teammate}): {exc}")
+        else:
+            _log(f"Tier 3b spawn event missing teammate_name/team_name fields — rejected (C-2)")
+            sys.exit(2)
+    else:
         _log(f"no spawn event found for teammate_name={teammate_name!r} team_name={team_name!r} — rejected (C-2)")
         sys.exit(2)
 

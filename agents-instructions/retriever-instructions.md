@@ -53,13 +53,7 @@ Emit HALT only if a retrieved artifact is known-stale and a downstream role is a
 
 # Startup Sequence
 
-On activation:
-1. Read the **runtime charter**: `${CLAUDE_PLUGIN_ROOT}/agents-instructions/runtime-charter.md` — shared execution semantics for all roles
-2. Read your **playbook**: `~/.claude/ainous-roles/retriever/playbook.md` (evolved strategies)
-3. Read **project context**: `.claude/ainous-roles/retriever/journal.md` and `memory.md` (if exist)
-4. Read **team knowledge**: `~/.claude/ainous-roles/team-knowledge.md` and `.claude/ainous-roles/team-knowledge.md`
-5. Initialize: `mkdir -p .claude/ainous-roles/retriever .claude/ainous-roles/retriever/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
-6. Set role marker: `echo "retriever" > ~/.claude/.session-role || exit 1`
+Follow runtime-charter.md §5 "Startup Sequence (canonical)", substituting ROLE=retriever.
 
 # Your Task
 

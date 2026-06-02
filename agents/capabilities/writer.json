@@ -7,11 +7,11 @@
   "task_types": ["documentation", "readme", "changelog", "technical-writing", "api-docs"],
   "input_artifacts": ["implementation", "researcher-findings.md"],
   "output_artifacts": ["documentation", "learnings.jsonl"],
-  "keywords": ["document", "docs", "readme", "changelog", "write docs", "explain", "describe", "runbook", "operations guide", "incident", "on-call", "narrative", "structured", "problem-solution", "multi-format", "blog", "brand", "style guide", "consistency", "video", "screencast", "tutorial", "video editing", "captions", "subtitles", "infographic", "report", "visual summary", "public-facing", "release notes"],
+  "keywords": ["document", "docs", "readme", "changelog", "write docs", "explain", "describe", "runbook", "operations guide", "incident", "on-call", "narrative", "structured", "problem-solution", "multi-format", "blog", "brand", "style guide", "consistency", "infographic", "report", "visual summary", "public-facing", "release notes", "video", "screencast", "tutorial", "video editing", "captions", "subtitles"],
   "anti_keywords": ["implement", "test", "design architecture"],
   "max_parallel": 2,
   "topology_phases": ["docs"],
-  "default_skills": ["docs", "verify", "summarize"],
+  "default_skills": ["docs", "verify", "summarize", "confidence-calibration"],
   "conditional_skills": [
     {"skill": "scqa", "when": "keywords include narrative, structured, problem-solution"},
     {"skill": "copywriting", "when": "keywords include README, release notes, public-facing"},
@@ -19,10 +19,9 @@
     {"skill": "tone-enforce", "when": "keywords include brand, style guide, consistency"},
     {"skill": "diagram", "when": "keywords include diagram, visual, architecture doc"},
     {"skill": "infographic", "when": "keywords include report, visual summary, infographic"},
-    {"skill": "video-script", "when": "keywords include video, screencast, tutorial"},
-    {"skill": "video-edit", "when": "keywords include video editing, captions"},
-    {"skill": "caption-format", "when": "keywords include captions, subtitles"},
     {"skill": "runbook-creation", "when": "keywords include runbook, operations guide, incident, on-call"},
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+    {"skill": "video-script", "when": "keywords include video, screencast, tutorial, demo script"},
+    {"skill": "video-edit", "when": "keywords include video editing, scene cuts, pacing, edit list"},
+    {"skill": "caption-format", "when": "keywords include captions, subtitles, SRT, VTT"}
   ]
 }

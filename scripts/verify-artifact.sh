@@ -123,7 +123,7 @@ def parse_yaml_simple(path):
                 k = m.group(1)
                 v = m.group(2).strip()
                 if v == '' or v == '[]':
-                    result[k] = [] if v == '[]' else None
+                    result[k] = []
                     current_key = k
                     in_list = True
                 else:
@@ -163,8 +163,7 @@ print('FRONTMATTER:' + json.dumps(req_frontmatter))
 PYEOF
 }
 
-manifest_output="$(_parse_manifest)"
-if [[ $? -ne 0 ]]; then
+if ! manifest_output="$(_parse_manifest)"; then
   _fail "failed to parse manifest for ${ARTIFACT_NAME}"
 fi
 

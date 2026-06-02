@@ -1,9 +1,25 @@
 {
   "event_type": "spawn",
-  "required": ["timestamp", "event", "role", "phase", "detail", "mode"],
-  "optional": ["schema", "session_id", "task_id"],
+  "required": ["ts", "schema", "event", "role"],
+  "optional": [
+    "source",
+    "session_id",
+    "teammate_name",
+    "team_name",
+    "spawn_mode",
+    "background",
+    "prompt_bytes",
+    "write_proxy_nonce_sha256",
+    "timestamp",
+    "phase",
+    "detail",
+    "mode",
+    "scope",
+    "task_id"
+  ],
   "enums": {
     "event": ["spawn"],
+    "spawn_mode": ["agent", "team_name"],
     "mode": ["agent", "tmux"]
   }
 }

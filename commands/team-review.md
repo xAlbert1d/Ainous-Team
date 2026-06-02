@@ -1,12 +1,12 @@
 ---
 name: team-review
-description: Run a full team review pipeline on code or architecture. Use when the user wants comprehensive review from multiple angles (security + quality + architecture).
-invoked_by: commands (user-facing, not role-invoked — not registered in any role's default_skills or conditional_skills)
+description: Run a full team review pipeline on code or architecture — security, quality, and architecture in parallel.
+allowed-tools: [Read, Grep, Glob, Bash, Write, Agent]
 ---
 
 # Team Review Pipeline
 
-Run a multi-role review using the Ainous Team. This skill orchestrates @security, @code-quality, and @architect in parallel for defense-in-depth analysis, with contracts and a verification gate.
+Run a multi-role review using the Ainous Team. This command orchestrates @security, @code-quality, and @architect in parallel for defense-in-depth analysis, with contracts and a verification gate.
 
 **Prerequisites:** Read `agents-instructions/runtime-charter.md` for shared execution semantics.
 

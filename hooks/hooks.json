@@ -48,7 +48,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|Bash|Read",
+        "matcher": "Edit|Write|Bash|Read|WebFetch|WebSearch",
         "hooks": [
           {
             "type": "command",
@@ -85,6 +85,17 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/webfetch-injection-detector\"",
+            "timeout": 5,
+            "async": false
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/taint-flag\"",
             "timeout": 2,
             "async": false
@@ -97,7 +108,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/write-proxy\"",
-            "timeout": 3000,
+            "timeout": 30,
             "async": false
           }
         ]

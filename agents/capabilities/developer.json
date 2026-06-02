@@ -11,7 +11,7 @@
   "anti_keywords": ["design", "test strategy", "document only", "review only"],
   "max_parallel": 3,
   "topology_phases": ["implement"],
-  "default_skills": ["tdd", "debug", "verify", "review-response"],
+  "default_skills": ["tdd", "debug", "verify", "review-response", "confidence-calibration"],
   "conditional_skills": [
     {"skill": "refactor", "when": "task type is cleanup or technical debt"},
     {"skill": "perf", "when": "keywords include performance, optimization, slow, latency"},
@@ -25,7 +25,6 @@
     {"skill": "observability", "when": "keywords include logging, monitoring, tracing, metrics"},
     {"skill": "a11y", "when": "keywords include accessibility, a11y, screen reader"},
     {"skill": "post-mortem", "when": "task follows an incident or production failure"},
-    {"skill": "estimate", "when": "keywords include estimate, scope, planning"},
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+    {"skill": "estimate", "when": "keywords include estimate, scope, planning"}
   ]
 }

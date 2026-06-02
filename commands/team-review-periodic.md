@@ -1,7 +1,7 @@
 ---
 name: team-review-periodic
-description: Periodic team health review. Use every 7 days or 10 commits to assess team learning, individual growth, handoff quality, and coordinator effectiveness. Like a combined 1-on-1 + team retro + manager review.
-invoked_by: commands (user-facing via /team-retro — not role-invoked, not registered in any role's default_skills or conditional_skills)
+description: Periodic team health review — individual growth, team dynamics, coordinator self-assessment, and action items. Triggered by /team-retro or automatically every 7 days / 10 commits.
+allowed-tools: [Read, Grep, Glob, Bash, Write, Agent]
 ---
 
 # Periodic Team Review

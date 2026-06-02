@@ -2,7 +2,7 @@
   "role": "consolidator",
   "version": "1.1",
   "preferred_spawn_mode": "agent",
-  "model": "sonnet",
+  "model": "opus",
   "description": "Distills team learnings, evolves playbooks, maintains knowledge base",
   "task_types": ["consolidation", "playbook-evolution", "knowledge-distillation", "journal-compaction"],
   "input_artifacts": ["task-history.jsonl", "learnings.jsonl", "journal.md"],
@@ -11,10 +11,9 @@
   "anti_keywords": ["implement feature", "design system", "security scan"],
   "max_parallel": 1,
   "topology_phases": ["post-session"],
-  "default_skills": ["strategy-evolution", "summarize"],
+  "default_skills": ["strategy-evolution", "summarize", "confidence-calibration"],
   "conditional_skills": [
     {"skill": "knowledge-structure", "when": "processing team-knowledge.md or cross-role insights"},
-    {"skill": "skill-creator", "when": "cross-role analysis finds a new reusable technique to propose"},
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
+    {"skill": "skill-creator", "when": "cross-role analysis finds a new reusable technique to propose"}
   ]
 }

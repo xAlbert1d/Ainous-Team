@@ -66,6 +66,13 @@ ALLOWLIST=(
     "PYTHONDONTWRITEBYTECODE"
     # macOS specifics
     "DYLD_LIBRARY_PATH"
+    # Version-dependent Claude Code vars: present in some Claude Code versions, absent in others.
+    # Referenced only as optional corroborating/log signals with safe empty-string defaults,
+    # so absence degrades gracefully and is NOT a fabrication bug. Behavior is correct whether
+    # or not the currently-installed binary provides the var.
+    "CLAUDE_CODE_TEAM_NAME"  # present in some CC versions; used in log/error strings alongside
+                             # CLAUDE_CODE_TEAMMATE_COMMAND — never in a branch condition.
+                             # Empty default means behavior is identical when absent.
 )
 
 # Build allowlist as pipe-separated regex alternation for grep

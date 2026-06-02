@@ -11,8 +11,6 @@
   "anti_keywords": ["implement", "design", "document", "test"],
   "max_parallel": 1,
   "topology_phases": ["all"],
-  "default_skills": [],
-  "conditional_skills": [
-    {"skill": "confidence-calibration", "when": "always — all analytical roles use this"}
-  ]
+  "default_skills": ["confidence-calibration"],
+  "conditional_skills": []
 }

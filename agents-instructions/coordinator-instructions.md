@@ -286,6 +286,17 @@ Given the context snapshot, memory, and user request, generate ranked action can
 
 **Agent Cards**: Before generating candidates, check `agents/capabilities/index.json` and load matching role capabilities from `agents/capabilities/<role>.json`. Match task keywords against `role.keywords` and exclude roles whose `anti_keywords` match. Cards are authoritative for routing; keywords must cover every `when` trigger in `conditional_skills` to preserve mechanical routing — a keyword lookup alone must be sufficient to identify the right role AND determine which conditional skills apply. This reduces Step 3 from LLM-creative to primarily mechanical — use LLM judgment only for ambiguous matches.
 
+**Semantic override (additive — keyword arrays are never weakened):** The coordinator MAY override a
+keyword match using the role `description` field and semantic judgment when keywords are ambiguous
+(a keyword matches 2+ roles equally) or stale (the keyword array predates a feature that shifted
+domain ownership). When a semantic override occurs, record the reason in the routing-decision event:
+```jsonl
+{"type":"routing-decision", ..., "keyword_match": "<matched-role>", "semantic_override": "<selected-role>", "override_reason": "<why the keyword match was overridden>", ...}
+```
+Do NOT remove keyword arrays or narrow them as a result of overrides — the keyword mechanism is the
+primary path for weaker models that cannot reliably do semantic reasoning. Overrides are an
+escape hatch, not a replacement.
+
 This is where you exercise judgment: which topology fits, which roles are needed, whether to answer directly, whether to ask for clarification. All other steps enforce mechanical constraints on your candidates.
 
 ## Step 4: Risk Assessment (deterministic)
@@ -345,7 +356,16 @@ Adapt prompt detail level to role maturity. Read `spawn_verbosity` from role's g
 - `supporting` (trust=Employee): state the outcome, provide context, let role determine approach
 - `delegating` (trust=Trusted): state the outcome only — the role knows what to do
 
-Default: `coaching` when growth.json not yet available.
+**Tier-conditional default** when growth.json is not yet available (or the role has no growth data):
+- `coaching` — for haiku-tier roles (mechanical, low-judgment tasks) or any role where the model
+  tier is unknown. Keeps guardrails active for weaker models.
+- `supporting` — for sonnet-tier and opus-tier roles. Capable models do not need step-by-step
+  hand-holding; stating the outcome and context is sufficient. Injecting unnecessary scaffolding
+  increases prompt noise for models that would ignore it anyway.
+
+Apply deterministically: check the model tier from Step 6's "Select model tier" table. If the
+assigned model is `haiku`, default to `coaching`. If `sonnet` or `opus`, default to `supporting`.
+If no model selection has been made yet, default to `coaching` (conservative).
 
 ### Precision Context Curation
 
@@ -840,6 +860,12 @@ The runtime charter defines the full event schema. Roles log their own `complete
   - **Reasoning tasks** (architecture debates, design choices, tradeoffs) → use **voting**: each role's weighted position counts independently. The highest-weighted view wins unless 2+ roles with equal expertise disagree, in which case escalate to the user.
   - **Knowledge tasks** (factual retrieval, code analysis, bug identification) → use **consensus**: synthesize overlapping findings and discard outliers with low evidence support.
   - Classification rule: "If roles could legitimately disagree based on different priorities or values — that is a reasoning task, use voting. If roles are observing the same ground truth and disagreement signals one of them is wrong — that is a knowledge task, use consensus."
+
+  **Argument-quality weighting and dissent surfacing (NeurIPS 2025 — P1 item 6):** When synthesizing parallel role outputs, weight by argument and evidence quality, not by agreement count. Consensus across role outputs is NOT a correctness signal — treating it as one reintroduces the conformity bias that the anti-conformity injection (F-9, above) was meant to prevent at the input side. Concretely:
+  - Identify the highest-confidence dissenting view among the role outputs (a role that reached a different conclusion with specific evidence or reasoning). Surface it explicitly in the synthesis rather than smoothing it away: "Note: @<role> dissented — [their argument]. Weighted lower because [reason], but flagged for human review if the disagreement touches a load-bearing assumption."
+  - A view held by 3 roles and challenged by 1 is not automatically correct. If the dissenting role's argument is stronger (more specific evidence, tighter reasoning, domain expertise match), weight the dissent upward accordingly.
+  - This applies alongside, not instead of, the expertise-weighted synthesis and voting/consensus rules above. The anti-conformity injection remains in place for parallel reviewers — this rule strengthens the aggregation side of the same defense.
+
 - Present to the user with clear sections per role
 - Note any conflicts between role outputs and suggest resolution (name which role's view you weighted higher and why)
 - After presenting results, ask: "Rate this team output (1-10, or skip):"

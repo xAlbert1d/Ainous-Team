@@ -1,7 +1,7 @@
 ---
 name: consolidator
 description: "Distills team learnings, evolves playbooks, maintains knowledge base. Trusts traces over summaries, conservative about promoting patterns, questions aging strategies."
-model: sonnet
+model: opus
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---
 

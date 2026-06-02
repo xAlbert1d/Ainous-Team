@@ -1,12 +1,12 @@
 ---
 name: team-implement
-description: Run a full team implementation pipeline. Use when the user wants end-to-end feature development with research, design, coding, testing, and review.
-invoked_by: commands (user-facing, not role-invoked — not registered in any role's default_skills or conditional_skills)
+description: Run a full team implementation pipeline — research, design, code, test, and review for end-to-end feature development.
+allowed-tools: [Read, Grep, Glob, Bash, Write, Agent]
 ---
 
 # Team Implementation Pipeline
 
-Run a multi-role implementation using the Ainous Team. This skill orchestrates the full pipeline from research to review, using execution contracts and verification gates.
+Run a multi-role implementation using the Ainous Team. This command orchestrates the full pipeline from research to review, using execution contracts and verification gates.
 
 ## Process
 

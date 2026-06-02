@@ -107,14 +107,18 @@ _stdin_session_id = _hook_payload.get("session_id", "") if isinstance(_hook_payl
 #   CLAUDE_CODE_TEAMMATE_COMMAND — present in binary; set ONLY for actual team-mode teammates.
 #     Coordinators (team-leads) do NOT get this var even when they are part of a team.
 #     Agent subagents spawned without team_name do NOT get it. This is the positive signal.
-#   CLAUDE_CODE_TEAM_NAME — present in binary; set for teammate AND coordinator in a team context.
-#     Used as defense-in-depth alongside CLAUDE_CODE_TEAMMATE_COMMAND.
+#   CLAUDE_CODE_TEAM_NAME — present in SOME Claude Code versions only (version-dependent);
+#     set for teammate AND coordinator in a team context when the binary provides it.
+#     Used ONLY as an optional corroborating signal in log/error message strings — never
+#     in a branch condition. Read with a safe empty-string default so absence (in versions
+#     that do not provide it) degrades gracefully without altering enforcement behavior.
 #   FABRICATED (not in binary, NEVER set by Claude Code):
 #     CLAUDE_TEAM_NAME — was our invented name; causes silent dead-code in production (C1 bug)
 #     CLAUDE_TEAM_ROLE — was our invented exemption marker; also never set
 #
 # Detection strategy: block if CLAUDE_CODE_TEAMMATE_COMMAND is set (non-empty).
-# Defense-in-depth: also accept CLAUDE_CODE_TEAM_NAME as corroborating signal.
+# Corroborating log signal: CLAUDE_CODE_TEAM_NAME included in error messages when available
+# (version-dependent; empty-default means behavior is identical whether or not binary sets it).
 # Coordinators: do NOT have CLAUDE_CODE_TEAMMATE_COMMAND → pass through.
 # Subagents (Agent without team_name): do NOT have CLAUDE_CODE_TEAMMATE_COMMAND → pass through.
 #
@@ -223,6 +227,15 @@ if not _provenance_common_loaded:
         # Phase 2 (v5.3.0): taint-flags surface — defense-in-depth behind TAINT_FLAG_WRITE_DENY.
         # If the primary deny-list is ever relaxed, provenance validation still applies.
         (r'\.claude/ainous-roles/team-sync/state/taint-flags/[^/]+\.jsonl$', 'jsonl'),
+        # Trust subtree (v5.11.0): growth.json is gated here as defense-in-depth against
+        # tool-surface trust escalation.  All LEGITIMATE writers (session-end hook,
+        # memory-maintain.py, consolidator Python snippets, coordinator sed-template) use
+        # DIRECT FILE I/O — they never go through the tool surface — so this pattern does NOT
+        # break any normal workflow.  A tool-surface Write/Edit to growth.json (which is the
+        # only path the provenance validator intercepts) is anomalous and should require a
+        # provenance block.  If any legitimate writer ever moves to the tool surface, remove
+        # this entry and document why in a comment here (follow-up item).
+        (r'\.claude/ainous-roles/[^/]+/growth\.json$', 'jsonl'),
     ]
 
     # Required provenance fields
@@ -913,10 +926,10 @@ JUNIOR_BASELINES = {
     # Developer TODO #3: operator has no journal/memory directories — skip own_paths
     # generation for operator to prevent phantom allow (see own_paths block below).
     "operator": [
-        ".claude/", "src/", "lib/", "app/", "scripts/", "hooks/", "agents/",
+        ".claude/", "src/", "lib/", "scripts/", "hooks/", "agents/",
         "agents-instructions/", "skills/", "tests/", "docs/", "templates/",
         "README", "readme",
-    ],  # v5.9.4 M-new-3: "app/" added for PM client scaffold at app/pm-client/
+    ],  # v5.9.4 M-new-3: "app/" entry removed — pm-client moved to ainous-team/pm-client/ outside plugin package
 }
 
 # Senior: expanded baselines (adjacent areas)

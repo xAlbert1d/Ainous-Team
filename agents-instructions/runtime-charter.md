@@ -61,7 +61,10 @@ Event types:
 {"type": "routing-decision", "timestamp": "ISO-8601", "task_id": "<task-id>", "typed_candidates": [...], "filtered": ["<role>: <reason>"], "selected": "DELEGATE_ROLE", "role": "<role>", "topology": "<topology-name>", "phases": ["<phase-list>"]}
 {"timestamp": "ISO-8601", "event": "HALT", "role": "<role>", "phase": "<phase>", "reason": "<specific defect — what was found>", "evidence": "<what was observed that triggers the halt>"}
 {"timestamp": "ISO-8601", "event": "framing-doubt", "role": "<role>", "phase": "<phase>", "doubt": "<what feels wrong about the problem framing>", "blocking": false}
+{"timestamp": "ISO-8601", "schema": "1", "event": "subagent-stop-observability", "session_id": "<sid>", "teammate": "<name>", "background_tasks_count": 2, "session_crons_count": 1, "background_task_ids": ["..."], "session_cron_ids": ["..."]}
 ```
+
+**SubagentStop lifecycle observability (v5.11.0):** `hooks/teammate-lifecycle-reaper` reads the SubagentStop payload (available in newer CC v2.1.145+/152+). When `background_tasks` or `session_crons` are present and non-empty, it appends one `subagent-stop-observability` event to `task-history.jsonl` via direct file I/O (never the tool surface). The event captures counts and safe name/id identifiers only — no payloads or task content. When these fields are absent (older CC) or empty, nothing is logged and no error is produced. The existing reaper behavior (flipping `isActive: false` in team config) runs unconditionally regardless of observability outcome.
 
 **HALT authorization**: Every role is explicitly authorized to emit a HALT event when it detects a defect that will propagate downstream if not addressed. HALT is a quality signal, not a failure — framing it as failure suppresses the signal. Coordinator reads HALT events before proceeding to the next phase and treats them as verification gate failures.
 
@@ -101,6 +104,21 @@ When a role uses a playbook strategy during a session, annotate the result inlin
 These annotations give the consolidator richer signal than binary "used/not used" — they capture WHY a strategy succeeded or failed in context.
 
 ## 5. Child Lifecycle
+
+### Startup Sequence (canonical — referenced by role instruction files)
+
+On activation, every role executes these steps in order, substituting `<role>` with its own role name:
+
+1. Read the **runtime charter**: `${CLAUDE_PLUGIN_ROOT}/agents-instructions/runtime-charter.md` — shared execution semantics for all roles
+2. Read your **playbook**: `~/.claude/ainous-roles/<role>/playbook.md` (evolved strategies)
+3. Read **project context**: `.claude/ainous-roles/<role>/journal.md` and `memory.md` (if exist)
+4. Read **team knowledge**: `~/.claude/ainous-roles/team-knowledge.md` and `.claude/ainous-roles/team-knowledge.md`
+5. Initialize: `mkdir -p .claude/ainous-roles/<role> .claude/ainous-roles/<role>/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
+6. Set role marker: `echo "<role>" > ~/.claude/.session-role || exit 1`
+
+Roles with additional startup reads (e.g., authority loading the authority-book and decision log, signal loading subscriptions) append those reads inline in their own instruction files after step 2.
+
+---
 
 1. **Spawn** — coordinator provides execution contract + skill assignment; agent self-loads its playbook, project context, and this charter via Startup Sequence
 2. **Init** — role creates directories: `mkdir -p .claude/ainous-roles/<role> .claude/ainous-roles/<role>/traces .claude/ainous-roles/team-sync/state .claude/ainous-roles/team-sync/artifacts`
@@ -267,14 +285,34 @@ This complements authority enforcement: authority controls what a role CAN do; d
 
 ## 13. Context Degradation Tiers (from GSD)
 
-Context quality degrades as the context window fills. Roles should adjust behavior based on estimated context usage:
+Context quality can degrade as the context window fills. Roles adjust behavior based on **observed
+pressure signals**, not on their own estimate of how full the window is. Self-estimated fill
+percentages are unreliable — a large-context session (e.g. 1M tokens) running at "70% fill" still
+has hundreds of thousands of tokens available and should operate at full exploration. Tier changes
+MUST be triggered by an explicit coordinator signal OR by directly observed tool/error pressure,
+never by a role's self-guessed percentage.
 
-| Tier | Context Used | Behavior |
-|------|-------------|----------|
-| **PEAK** | 0-30% | Full exploration, detailed analysis, rich output |
-| **GOOD** | 30-50% | Normal operation, standard detail |
-| **DEGRADING** | 50-70% | Compress output, skip optional analysis, prioritize contract deliverables |
-| **POOR** | 70%+ | Minimum viable output only, complete current task and stop, do not start new subtasks |
+**Large-context sessions** (where the coordinator has not signaled degradation and no tool errors
+are appearing): operate as PEAK regardless of perceived fill. The lower tiers simply do not fire.
+
+**Tier activation rules:**
+- **PEAK** — default; active unless a lower tier is triggered.
+- **GOOD / DEGRADING / POOR** — activate only when the coordinator explicitly signals a tier
+  downgrade (e.g. injects "context-pressure: DEGRADING" into the role's prompt or mailbox), OR
+  when the role observes direct tool pressure: repeated tool-call failures, truncated outputs, or
+  the Early Warning Signs below.
+
+| Tier | Activation Condition | Behavior |
+|------|---------------------|----------|
+| **PEAK** | Default — no pressure signals | Full exploration, detailed analysis, rich output |
+| **GOOD** | Coordinator signals GOOD, or minor output truncation observed | Normal operation, standard detail |
+| **DEGRADING** | Coordinator signals DEGRADING, or 2+ consecutive tool errors | Compress output, skip optional analysis, prioritize contract deliverables |
+| **POOR** | Coordinator signals POOR, or repeated tool failures blocking progress | Minimum viable output only, complete current task and stop, do not start new subtasks |
+
+**Degradation is graceful**: on large-context models the lower tiers will never fire during normal
+operation — they exist as a safety net for weaker models or genuinely long sessions. Roles on small
+contexts (200K) that receive no coordinator signal should watch Early Warning Signs more actively
+and self-trigger one tier lower if they appear.
 
 ### Early Warning Signs (detect before hitting hard limits)
 1. **Silent partial completion**: role starts skipping steps it previously followed
