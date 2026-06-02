@@ -461,7 +461,7 @@ Claude Code supports native tmux teammate spawning via `Agent(team_name=..., nam
 
 ## Appendix: Governance Mechanisms
 
-The following mechanisms span three classification tiers. NORMATIVE rows are prompt-level instructions with no code enforcement. PARTIAL rows have partial mechanical backing noted inline. ENFORCED rows are fully code-backed. The sole comprehensive mechanically enforced safety surface is `hooks/authority-enforce.sh` (see CLAUDE.md §Enforcement).
+The following mechanisms span three classification tiers. NORMATIVE rows are prompt-level instructions with no code enforcement. PARTIAL rows have partial mechanical backing noted inline. ENFORCED rows are fully code-backed. As of v5.10.0+ the enforced surface includes both `hooks/authority-enforce.sh` (security gate) and `scripts/memory-maintain.py` (memory lifecycle gate), the latter invoked fail-open from the SessionEnd hook and checked hard-fail in `scripts/pre-ship-gate.sh` (see CLAUDE.md §Enforcement).
 
 | Mechanism | Status | Source |
 |-----------|--------|--------|
@@ -471,19 +471,33 @@ The following mechanisms span three classification tiers. NORMATIVE rows are pro
 | Expertise-weighted synthesis | NORMATIVE | Prose-only in coordinator instructions |
 | Structural provocation injection | NORMATIVE | Prose trigger with LLM self-detection |
 | Anti-conformity for parallel reviewers | NORMATIVE | Coordinator self-discipline |
-| 50-session memory cap | NORMATIVE | Python block in consolidator prompt |
+| Strategy promotion / reinforce / RETIREMENT (incl. playbook 30-cap retirement) | NORMATIVE | Retirement and reinforce are consolidator judgment. `enforce_playbook_cap()` in `scripts/memory-maintain.py` mechanically REPORTS when the cap is exceeded (exits 1 in `--check`), but does not auto-retire any strategy — the comment in code reads "retirement requires consolidator judgment." Cap violation is thus reported mechanically; retirement action remains normative. |
+| Poisoned-memory promotion gate (D-8) | NORMATIVE | Prose-only in consolidator instructions; no code gate |
 | Advisory lock on team-knowledge | NORMATIVE | Explicitly not OS-enforced |
 | Context degradation tiers (PEAK/GOOD/POOR) | NORMATIVE | LLM self-assesses from heuristics; no token counter |
+| Predictive routing / situational-leadership spawn verbosity | NORMATIVE | Prose-only in coordinator instructions |
+| 50-session memory cap (v5.10.0+) | ENFORCED | `enforce_session_cap()` in `scripts/memory-maintain.py` — WAL-safe trim + archive to `sessions-archive.jsonl`; invoked fail-open from `hooks/session-end` and hard-fail from `scripts/pre-ship-gate.sh` Gate 3. Previously a Python block the LLM was asked to execute mentally. |
+| learnings.jsonl dedup (v5.10.0+) | ENFORCED | `dedup_learnings()` in `scripts/memory-maintain.py` — keeps highest-confidence entry per (key, type) pair; WAL-safe under advisory lock; same invocation chain as session cap. |
+| learnings.jsonl orphan-prune (v5.10.0+) | ENFORCED | `prune_orphan_learnings()` in `scripts/memory-maintain.py` — removes entries whose every referenced file is missing; same invocation chain. |
+| Expired-decision rotation (v5.10.0+) | ENFORCED | `rotate_expired_decisions()` in `scripts/memory-maintain.py` — moves decisions.md blocks with a past `expires:` date to `decisions-archive.md`; WAL-safe under advisory lock; same invocation chain. |
+| Stale-fact flagging (v5.10.0+) | ENFORCED (flagging); NORMATIVE (deletion) | `flag_stale_facts()` in `scripts/memory-maintain.py` mechanically annotates team-knowledge.md lines with `<!-- STALE: last-seen YYYY-MM-DD -->` when the `discovered:` date is older than 180 days. No facts are removed by the script — deletion or consolidation of flagged facts remains consolidator judgment. |
+| Knowledge-index integrity (v5.10.0+) | ENFORCED | `verify_index_integrity()` in `scripts/memory-maintain.py` — checks all Markdown links in `team-sync/index.md`; removes broken link substrings (fail-safe: refuses if removal would shrink the index by >30%); WAL-safe under advisory lock; same invocation chain. |
+| Trust-level audit — clamping DOWN (v5.12.0+) | ENFORCED | `trust_audit()` in `scripts/memory-maintain.py` — mechanically CLAMPS trust.level down to the maximum justified by session history (score + sessions_completed); fail-safe; WAL-safe; checked in pre-ship Gate 4. "Principal" level (manual grant) is exempt from auto-clamping. Never raises trust. |
+| Trust-level audit — RAISING | NORMATIVE | `trust_audit()` deliberately never raises trust.level — raising is left to consolidator judgment. Only downward clamping is mechanical. |
 | Soft enforcement (main session NOTE) | PARTIAL | Implemented in `hooks/authority-enforce.sh:35-41` but advisory only — emits a NOTE, does not block. Behavior is informational, not a safety invariant. |
 | HALT events wired end-to-end | PARTIAL | `runtime-charter.md` (emit) + coordinator instructions (grep). Enforcement gate does NOT read HALT. |
 | Session-log crash recovery (read path) | PARTIAL | Writes exist (task-history.jsonl, hook-enforced). Read path is a prompt instruction; not a hook or daemon. |
-| Fail-closed authority gate | ENFORCED | `hooks/authority-enforce.sh` — the one code-backed claim |
+| Fail-closed authority gate | ENFORCED | `hooks/authority-enforce.sh` — the primary security-surface code-backed claim |
 | Taint-flag mitigation (v5.3.0+) | ENFORCED | `hooks/taint-flag` (PostToolUse) + `_validate_taint_field` (PreToolUse in authority-enforce.sh) — mechanically backed. See §phase-2-supply-chain. |
 | Scope-reduction-on-taint (v5.8.0+) | ENFORCED | `_session_is_tainted` predicate in `authority-enforce.sh` — tainted sessions restricted to read-only Bash allowlist and role-own/artifacts Write paths. See §phase-2-supply-chain and design artifact `v5.8-design-next-wave.md`. |
 | Agent-boundary taint propagation (v5.9.0, Option A) | ENFORCED | `hooks/spawn-telemetry` extended — parent-to-child taint inheritance on Agent spawn when parent is tainted. Closes cross-agent laundering gap. Fail-open when child_sid unavailable. See §phase-2-supply-chain. |
 | Spawn-event auto-emission (v5.4.0+) | ENFORCED | `hooks/spawn-telemetry` PostToolUse hook — mechanical, not discipline-dependent |
 | Write-proxy hook (v5.5.0+) | ENFORCED | `hooks/write-proxy` PostToolUse hook on SendMessage — HMAC-verified writes on teammate behalf |
 | No-teammate-Write policy (v5.4.1 §15) | ENFORCED (v5.9.0) | PreToolUse block in `authority-enforce.sh` — CLAUDE_TEAM_NAME env var detection; team-leads (CLAUDE_TEAM_ROLE=team-lead) exempt. Previously normative-only. |
+| Archive-file capping — sessions-archive.jsonl / decisions-archive.md (v5.12.1) | ENFORCED | `cap_sessions_archive()` and `cap_decisions_archive()` in `scripts/memory-maintain.py` — keep the most recent N entries (`ARCHIVE_SESSION_CAP=500`, `ARCHIVE_DECISION_CAP=200`), drop oldest; WAL-safe under advisory lock; same fail-open SessionEnd invocation chain; reported in `--check`. Bounds the cold-storage growth that capping the hot arrays moved downstream. |
+| Model-field consistency between agents/*.md and capabilities/*.json (v5.12.1) | ENFORCED | `scripts/verify-model-consistency.sh` — asserts each role's authoritative `agents/<role>.md` frontmatter `model:` equals its `capabilities/<role>.json` `"model"`; wired as pre-ship Gate 5 (exit 5 on mismatch). Catches dual-source drift without removing either field. |
 | Pane-divider naming convention (v5.6.5) | NORMATIVE | Coordinator spawn-prompt discipline; no enforcement hook |
+
+**Intentional vs. candidate classification note (as of v5.12.0):** NORMATIVE rows that require genuine LLM judgment and are intentionally permanent: expertise-weighted synthesis, predictive routing, situational-leadership spawn verbosity, poisoned-memory promotion gate (D-8), strategy retirement, trust raising, and HALT wiring. These involve trade-off reasoning that cannot be safely reduced to a predicate. NORMATIVE rows that are candidates for future mechanical enforcement: mechanical routing via Agent Cards (predicate over index.json is straightforward) and advisory lock on team-knowledge (could become OS-level). (Archive-file capping and model-field consistency were candidates in earlier drafts; both became ENFORCED in v5.12.1 — see the rows above.)
 
 *Source of truth for this table: `docs/2026-04-17-critical-refinement-analysis.md §F2`. Do not duplicate — reference that file for updates.*

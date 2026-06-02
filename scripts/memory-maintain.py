@@ -47,9 +47,11 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 SESSION_CAP = 50          # Maximum entries in growth.json sessions[]
+ARCHIVE_SESSION_CAP = 500      # Maximum entries in sessions-archive.jsonl (cold storage)
 PLAYBOOK_CAP = 30         # Maximum strategies in playbook.md
 LEARNING_MIN_CONFIDENCE = 0.3  # Prune entries below this if not corroborated
 DECISION_EXPIRY_DAYS = 90      # Rotate decisions older than this
+ARCHIVE_DECISION_CAP = 200     # Maximum decision blocks in decisions-archive.md (cold storage)
 STALE_FACT_DAYS = 180          # Flag facts older than this
 
 # INDEX_SHRINK_MAX_FRACTION: refuse to write an index that would shrink by more than
@@ -547,6 +549,177 @@ def rotate_expired_decisions(dry_run: bool = False, verbose: bool = False) -> bo
 
 
 # ---------------------------------------------------------------------------
+# 5b. cap_sessions_archive(role)
+# ---------------------------------------------------------------------------
+
+
+def cap_sessions_archive(role: str, dry_run: bool = False, verbose: bool = False) -> bool:
+    """Cap sessions-archive.jsonl to ARCHIVE_SESSION_CAP (500) entries.
+
+    sessions-archive.jsonl is APPEND-only cold storage written by
+    enforce_session_cap.  Without a cap it grows unbounded over hundreds of
+    sessions.  This function keeps the NEWEST N entries and drops the oldest,
+    mirroring the existing cap style:
+      - WAL-safe (.new → verify → mv)
+      - Advisory lock (sessions-archive-cap.lock)
+      - --dry-run/--check honored (report but do not mutate)
+      - Fail-safe skip on lock contention
+    Returns True if within cap or successfully trimmed; False on error/dry-run violation.
+    """
+    archive_path = GROWTH_DIR / role / "sessions-archive.jsonl"
+    if not archive_path.exists():
+        _log(f"cap_sessions_archive({role}): sessions-archive.jsonl not found — skipping", verbose)
+        return True
+
+    try:
+        raw = archive_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _log(f"cap_sessions_archive({role}): cannot read sessions-archive.jsonl: {exc}", always=True)
+        return False
+
+    lines = [l for l in raw.splitlines() if l.strip()]
+    if len(lines) <= ARCHIVE_SESSION_CAP:
+        _log(f"cap_sessions_archive({role}): {len(lines)} entries — within cap, nothing to do", verbose)
+        return True
+
+    excess = len(lines) - ARCHIVE_SESSION_CAP
+    _log(
+        f"cap_sessions_archive({role}): {len(lines)} archive entries exceeds cap "
+        f"{ARCHIVE_SESSION_CAP} — dropping {excess} oldest",
+        always=True,
+    )
+
+    if dry_run:
+        _log(f"[dry-run] would drop {excess} oldest sessions-archive entries for role={role}", always=True)
+        return False  # Signal: action needed
+
+    lock_path = GROWTH_DIR / role / "sessions-archive-cap.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log(f"cap_sessions_archive({role}): could not acquire advisory lock — skipping", always=True)
+        return False
+
+    try:
+        # Re-read under lock to avoid TOCTOU
+        try:
+            raw = archive_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"cap_sessions_archive({role}): re-read under lock failed: {exc}", always=True)
+            return False
+
+        lines = [l for l in raw.splitlines() if l.strip()]
+        if len(lines) <= ARCHIVE_SESSION_CAP:
+            _log(f"cap_sessions_archive({role}): after lock re-read — within cap, nothing to do", verbose)
+            return True
+
+        # Keep the newest ARCHIVE_SESSION_CAP entries (drop oldest from the front)
+        kept = lines[-ARCHIVE_SESSION_CAP:]
+        content = "\n".join(kept) + "\n"
+        ok = _wal_write(archive_path, content)
+        if ok:
+            _log(
+                f"cap_sessions_archive({role}): trimmed to {len(kept)} entries "
+                f"(dropped {len(lines) - len(kept)} oldest)",
+                verbose,
+            )
+        return ok
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
+
+
+# ---------------------------------------------------------------------------
+# 5c. cap_decisions_archive()
+# ---------------------------------------------------------------------------
+
+
+def cap_decisions_archive(dry_run: bool = False, verbose: bool = False) -> bool:
+    """Cap decisions-archive.md to ARCHIVE_DECISION_CAP (200) decision blocks.
+
+    decisions-archive.md is APPEND-only cold storage written by
+    rotate_expired_decisions.  Without a cap it grows unbounded.  This function
+    keeps the NEWEST N decision blocks and drops the oldest.
+
+    A decision block starts with a line matching `- **role:**` (same delimiter
+    used by rotate_expired_decisions and the live decisions parser).  Preamble
+    lines (comments, headers) that appear before the first block are preserved.
+
+    WAL-safe (.new → verify → mv), advisory lock, --dry-run/--check honored,
+    fail-safe skip on lock contention.
+    """
+    archive_path = GROWTH_DIR / "authority" / "decisions-archive.md"
+    if not archive_path.exists():
+        _log("cap_decisions_archive: decisions-archive.md not found — skipping", verbose)
+        return True
+
+    lock_path = GROWTH_DIR / "authority" / "decisions-archive-cap.lock"
+    acquired, lock_fd = _acquire_advisory_lock(lock_path)
+    if not acquired:
+        _log("cap_decisions_archive: could not acquire advisory lock — skipping this run", always=True)
+        return True  # Fail-safe: skip rather than abort
+
+    try:
+        try:
+            text = archive_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _log(f"cap_decisions_archive: cannot read decisions-archive.md: {exc}", always=True)
+            return False
+
+        # Parse into preamble (pre-first-block) + blocks (same logic as rotate_expired_decisions)
+        blocks: list[list[str]] = []
+        current: list[str] = []
+        preamble: list[str] = []
+        in_blocks = False
+
+        for line in text.splitlines(keepends=True):
+            if not in_blocks and line.strip().startswith("- **role:**"):
+                in_blocks = True
+            if not in_blocks:
+                preamble.append(line)
+            elif line.strip().startswith("- **role:**") and current:
+                blocks.append(current)
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            blocks.append(current)
+
+        if len(blocks) <= ARCHIVE_DECISION_CAP:
+            _log(
+                f"cap_decisions_archive: {len(blocks)} blocks — within cap, nothing to do",
+                verbose,
+            )
+            return True
+
+        excess = len(blocks) - ARCHIVE_DECISION_CAP
+        _log(
+            f"cap_decisions_archive: {len(blocks)} decision blocks exceeds cap "
+            f"{ARCHIVE_DECISION_CAP} — dropping {excess} oldest",
+            always=True,
+        )
+
+        if dry_run:
+            _log(
+                f"[dry-run] would drop {excess} oldest decisions-archive blocks",
+                always=True,
+            )
+            return False  # Signal: action needed
+
+        # Keep newest ARCHIVE_DECISION_CAP blocks (drop oldest from the front)
+        kept_blocks = blocks[-ARCHIVE_DECISION_CAP:]
+        new_content = "".join(preamble) + "".join("".join(b) for b in kept_blocks)
+        ok = _wal_write(archive_path, new_content)
+        if ok:
+            _log(
+                f"cap_decisions_archive: trimmed to {len(kept_blocks)} blocks "
+                f"(dropped {excess} oldest)",
+                verbose,
+            )
+        return ok
+    finally:
+        _release_advisory_lock(lock_path, lock_fd)
+
+
+# ---------------------------------------------------------------------------
 # 6. flag_stale_facts()
 # ---------------------------------------------------------------------------
 
@@ -986,10 +1159,16 @@ def main() -> int:
             ok = trust_audit(role, dry_run=dry_run, verbose=verbose)
             all_ok = all_ok and ok
 
+            ok = cap_sessions_archive(role, dry_run=dry_run, verbose=verbose)
+            all_ok = all_ok and ok
+
     # Global operations — always run regardless of whether any role dirs exist.
     # These operate on global files (team-knowledge.md, decisions.md, index.md)
     # that are independent of per-role structure.
     ok = rotate_expired_decisions(dry_run=dry_run, verbose=verbose)
+    all_ok = all_ok and ok
+
+    ok = cap_decisions_archive(dry_run=dry_run, verbose=verbose)
     all_ok = all_ok and ok
 
     ok = flag_stale_facts(dry_run=dry_run, verbose=verbose)

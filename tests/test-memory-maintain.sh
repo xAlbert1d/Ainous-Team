@@ -724,6 +724,219 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TC-MM-23: cap_sessions_archive — archive >500 trimmed to 500 keeping newest
+# ---------------------------------------------------------------------------
+GD23=$(_make_fixture "tc-mm-23")
+mkdir -p "$GD23/developer"
+# Write 503 JSONL lines to the archive (oldest have index 0..2, newest have larger indices)
+python3 -c "
+import json
+for i in range(503):
+    print(json.dumps({'date': '2026-01-01', 'summary': 'session ' + str(i), 'index': i}))
+" > "$GD23/developer/sessions-archive.jsonl"
+
+_run "$GD23" --role developer --verbose > /dev/null 2>&1
+
+ARCHIVE_LINES23=$(grep -c . "$GD23/developer/sessions-archive.jsonl" 2>/dev/null || echo -1)
+# Verify newest entries are kept (last entry should be index=502)
+LAST_INDEX23=$(python3 -c "
+import json
+lines = [l.strip() for l in open('$GD23/developer/sessions-archive.jsonl') if l.strip()]
+if lines:
+    print(json.loads(lines[-1]).get('index', -1))
+else:
+    print(-1)
+" 2>/dev/null || echo -1)
+
+if [ "$ARCHIVE_LINES23" -eq 500 ] && [ "$LAST_INDEX23" -eq 502 ]; then
+    _pass "TC-MM-23: sessions-archive >500 trimmed to 500 keeping newest entries"
+else
+    _fail "TC-MM-23: cap_sessions_archive" \
+        "archive_lines=$ARCHIVE_LINES23 (want 500) last_index=$LAST_INDEX23 (want 502)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-24: cap_sessions_archive — archive <=500 untouched
+# ---------------------------------------------------------------------------
+GD24=$(_make_fixture "tc-mm-24")
+mkdir -p "$GD24/developer"
+python3 -c "
+import json
+for i in range(10):
+    print(json.dumps({'date': '2026-01-01', 'summary': 'session ' + str(i)}))
+" > "$GD24/developer/sessions-archive.jsonl"
+ORIGINAL_HASH24=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD24/developer/sessions-archive.jsonl','rb').read()).hexdigest())" 2>/dev/null)
+
+_run "$GD24" --role developer > /dev/null 2>&1
+
+AFTER_HASH24=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD24/developer/sessions-archive.jsonl','rb').read()).hexdigest())" 2>/dev/null)
+
+if [ "$ORIGINAL_HASH24" = "$AFTER_HASH24" ]; then
+    _pass "TC-MM-24: sessions-archive <=500 entries — file untouched"
+else
+    _fail "TC-MM-24: sessions-archive within cap should be untouched" "hash changed unexpectedly"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-25: cap_sessions_archive — --dry-run does NOT mutate, exits 1
+# ---------------------------------------------------------------------------
+GD25=$(_make_fixture "tc-mm-25")
+mkdir -p "$GD25/developer"
+python3 -c "
+import json
+for i in range(503):
+    print(json.dumps({'date': '2026-01-01', 'summary': 'session ' + str(i)}))
+" > "$GD25/developer/sessions-archive.jsonl"
+ORIGINAL_CONTENT25=$(cat "$GD25/developer/sessions-archive.jsonl")
+
+EXIT25=$(_run "$GD25" --role developer --dry-run > /dev/null 2>&1; echo $?)
+AFTER_CONTENT25=$(cat "$GD25/developer/sessions-archive.jsonl")
+
+if [ "$EXIT25" -eq 1 ] && [ "$ORIGINAL_CONTENT25" = "$AFTER_CONTENT25" ]; then
+    _pass "TC-MM-25: --dry-run with sessions-archive >cap → exit 1, archive NOT mutated"
+else
+    _fail "TC-MM-25: --dry-run should not mutate sessions-archive" \
+        "exit=$EXIT25 content_changed=$([ "$ORIGINAL_CONTENT25" != "$AFTER_CONTENT25" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-26: cap_sessions_archive — WAL leaves no .new residue after success
+# ---------------------------------------------------------------------------
+GD26=$(_make_fixture "tc-mm-26")
+mkdir -p "$GD26/developer"
+python3 -c "
+import json
+for i in range(503):
+    print(json.dumps({'date': '2026-01-01', 'summary': 'session ' + str(i)}))
+" > "$GD26/developer/sessions-archive.jsonl"
+
+_run "$GD26" --role developer > /dev/null 2>&1
+
+if [ ! -f "$GD26/developer/sessions-archive.jsonl.new" ]; then
+    _pass "TC-MM-26: WAL leaves no .new residue after sessions-archive cap enforcement"
+else
+    _fail "TC-MM-26: .new file still present after WAL promotion" \
+        "found: $GD26/developer/sessions-archive.jsonl.new"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-27: cap_decisions_archive — archive >200 blocks trimmed to 200 keeping newest
+# ---------------------------------------------------------------------------
+GD27=$(_make_fixture "tc-mm-27")
+mkdir -p "$GD27/authority"
+# Write 202 decision blocks; newest has role=role202
+python3 -c "
+for i in range(202):
+    print('- **role:** role' + str(i))
+    print('- **path_pattern:** src/file' + str(i) + '.py')
+    print('- **decision:** allow')
+    print('- **scope:** session')
+    print('- **expires:** 2020-01-01')
+    print()
+" > "$GD27/authority/decisions-archive.md"
+
+_run "$GD27" --verbose > /dev/null 2>&1
+
+# Count blocks after trimming
+BLOCK_COUNT27=$(python3 -c "
+blocks = 0
+with open('$GD27/authority/decisions-archive.md') as f:
+    for line in f:
+        if line.strip().startswith('- **role:**'):
+            blocks += 1
+print(blocks)
+" 2>/dev/null || echo -1)
+
+# Verify newest entry is present (role201 is the newest)
+HAS_NEWEST27=0
+grep -q "role201" "$GD27/authority/decisions-archive.md" 2>/dev/null && HAS_NEWEST27=1
+HAS_OLDEST27=1
+grep -q "role0" "$GD27/authority/decisions-archive.md" 2>/dev/null || HAS_OLDEST27=0
+
+if [ "$BLOCK_COUNT27" -eq 200 ] && [ "$HAS_NEWEST27" -eq 1 ] && [ "$HAS_OLDEST27" -eq 0 ]; then
+    _pass "TC-MM-27: decisions-archive >200 blocks trimmed to 200 keeping newest"
+else
+    _fail "TC-MM-27: cap_decisions_archive" \
+        "block_count=$BLOCK_COUNT27 (want 200) has_newest=$HAS_NEWEST27 has_oldest=$HAS_OLDEST27"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-28: cap_decisions_archive — archive <=200 blocks untouched
+# ---------------------------------------------------------------------------
+GD28=$(_make_fixture "tc-mm-28")
+mkdir -p "$GD28/authority"
+python3 -c "
+for i in range(5):
+    print('- **role:** role' + str(i))
+    print('- **path_pattern:** src/file.py')
+    print('- **decision:** allow')
+    print('- **scope:** session')
+    print('- **expires:** 2020-01-01')
+    print()
+" > "$GD28/authority/decisions-archive.md"
+ORIGINAL_HASH28=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD28/authority/decisions-archive.md','rb').read()).hexdigest())" 2>/dev/null)
+
+_run "$GD28" > /dev/null 2>&1
+
+AFTER_HASH28=$(python3 -c "import hashlib; print(hashlib.md5(open('$GD28/authority/decisions-archive.md','rb').read()).hexdigest())" 2>/dev/null)
+
+if [ "$ORIGINAL_HASH28" = "$AFTER_HASH28" ]; then
+    _pass "TC-MM-28: decisions-archive <=200 blocks — file untouched"
+else
+    _fail "TC-MM-28: decisions-archive within cap should be untouched" "hash changed unexpectedly"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-29: cap_decisions_archive — --dry-run does NOT mutate, exits 1
+# ---------------------------------------------------------------------------
+GD29=$(_make_fixture "tc-mm-29")
+mkdir -p "$GD29/authority"
+python3 -c "
+for i in range(202):
+    print('- **role:** role' + str(i))
+    print('- **path_pattern:** src/file.py')
+    print('- **decision:** allow')
+    print('- **scope:** session')
+    print('- **expires:** 2020-01-01')
+    print()
+" > "$GD29/authority/decisions-archive.md"
+ORIGINAL_CONTENT29=$(cat "$GD29/authority/decisions-archive.md")
+
+EXIT29=$(_run "$GD29" --dry-run > /dev/null 2>&1; echo $?)
+AFTER_CONTENT29=$(cat "$GD29/authority/decisions-archive.md")
+
+if [ "$EXIT29" -eq 1 ] && [ "$ORIGINAL_CONTENT29" = "$AFTER_CONTENT29" ]; then
+    _pass "TC-MM-29: --dry-run with decisions-archive >cap → exit 1, archive NOT mutated"
+else
+    _fail "TC-MM-29: --dry-run should not mutate decisions-archive" \
+        "exit=$EXIT29 content_changed=$([ "$ORIGINAL_CONTENT29" != "$AFTER_CONTENT29" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-MM-30: cap_decisions_archive — WAL leaves no .new residue after success
+# ---------------------------------------------------------------------------
+GD30=$(_make_fixture "tc-mm-30")
+mkdir -p "$GD30/authority"
+python3 -c "
+for i in range(202):
+    print('- **role:** role' + str(i))
+    print('- **path_pattern:** src/file.py')
+    print('- **decision:** allow')
+    print('- **scope:** session')
+    print('- **expires:** 2020-01-01')
+    print()
+" > "$GD30/authority/decisions-archive.md"
+
+_run "$GD30" > /dev/null 2>&1
+
+if [ ! -f "$GD30/authority/decisions-archive.md.new" ]; then
+    _pass "TC-MM-30: WAL leaves no .new residue after decisions-archive cap enforcement"
+else
+    _fail "TC-MM-30: .new file still present after WAL promotion" \
+        "found: $GD30/authority/decisions-archive.md.new"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
