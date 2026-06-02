@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# teammate-lifecycle-reaper — SessionEnd hook for ainous-team plugin (v5.7.0)
+# teammate-lifecycle-reaper — SubagentStop/SessionEnd hook for ainous-team plugin (v5.11.0)
 # When a team-mode teammate's session ends, flip its isActive flag to false
 # in ~/.claude/teams/<team>/config.json so TeamDelete succeeds immediately
 # without waiting for SessionStart state-reaper next session.
 #
 # FAIL-OPEN: all logic runs in a subshell; exits 0 unconditionally.
 # Only modifies team configs where the stopping teammate is found as active.
+#
+# Lifecycle observability (v5.11.0): if the SubagentStop payload (stdin) contains
+# non-empty background_tasks or session_crons fields (newer CC v2.1.145+/152+),
+# log a lightweight observability record to task-history.jsonl capturing counts
+# and safe identifiers only (NOT full content — privacy discipline preserved).
+# Older CC versions that omit these fields produce no extra log lines; fail-open.
 #
 # Teammate identity resolution order:
 #   1. Per-pane marker ~/.claude/.session-role-<TMUX_PANE>
@@ -16,7 +22,25 @@ set -uo pipefail
 
 _ERROR_LOG="${HOME}/.claude/.lifecycle-reaper-errors.log"
 
+# Read stdin — Claude Code passes the SubagentStop payload as JSON.
+# Captured here (outside the subshell) because stdin is only available once;
+# it would be empty inside the subshell if consumed after forking.
+# Written to a 0600 tempfile so the subshell can pass a safe path (avoids
+# ARG_MAX limits and quoting hazards with large/special payloads).
+# Fail-open: empty or non-JSON stdin is harmless.
+_STDIN_TMP=""
+_STDIN_INPUT=$(cat 2>/dev/null || true)
+if [ -n "$_STDIN_INPUT" ] && command -v python3 &>/dev/null 2>/dev/null; then
+    _STDIN_TMP=$(python3 -c \
+        "import tempfile,os,sys; fd,p=tempfile.mkstemp(prefix='.rl-stdin-',dir=os.path.expanduser('~/.claude')); os.chmod(p,0o600); os.write(fd,sys.stdin.buffer.read()); os.close(fd); print(p)" \
+        <<< "$_STDIN_INPUT" 2>/dev/null || echo "")
+fi
+
 (
+    # Ensure tempfile is cleaned up when the subshell exits (regardless of how)
+    _cleanup_stdin_tmp() { [ -n "${_STDIN_TMP:-}" ] && rm -f "$_STDIN_TMP" 2>/dev/null || true; }
+    trap '_cleanup_stdin_tmp' EXIT
+
     if ! command -v python3 &>/dev/null; then
         printf '[%s] lifecycle-reaper: python3 not found — skipping\n' \
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_ERROR_LOG" 2>/dev/null || true
@@ -37,7 +61,7 @@ _ERROR_LOG="${HOME}/.claude/.lifecycle-reaper-errors.log"
     TASK_HISTORY="${PROJECT_ROOT}/.claude/ainous-roles/team-sync/state/task-history.jsonl"
     TEAMS_DIR="${HOME}/.claude/teams"
 
-    python3 - "$TEAMMATE_NAME" "$SESSION_ID" "$TEAMS_DIR" "$TASK_HISTORY" << 'PYEOF'
+    python3 - "$TEAMMATE_NAME" "$SESSION_ID" "$TEAMS_DIR" "$TASK_HISTORY" "${_STDIN_TMP:-}" << 'PYEOF'
 import sys, json, os
 from datetime import datetime, timezone
 
@@ -45,6 +69,16 @@ teammate_name_arg = sys.argv[1]   # May be a role name (e.g. "developer") or tea
 session_id        = sys.argv[2]
 teams_dir         = sys.argv[3]
 hist_path         = sys.argv[4]
+stdin_tmp_path    = sys.argv[5] if len(sys.argv) > 5 else ""  # path to 0600 tempfile with raw stdin
+
+# Read the stdin payload from the tempfile (if present and non-empty path)
+stdin_input = ""
+if stdin_tmp_path:
+    try:
+        with open(stdin_tmp_path, encoding="utf-8", errors="replace") as _sf:
+            stdin_input = _sf.read()
+    except OSError:
+        pass  # Tempfile unavailable — observability skipped, reap continues normally
 
 error_log = os.path.expanduser("~/.claude/.lifecycle-reaper-errors.log")
 
@@ -55,6 +89,84 @@ def _log(msg):
             _f.write(f"[{ts}] lifecycle-reaper: {msg}\n")
     except OSError:
         pass
+
+# ---------------------------------------------------------------------------
+# Lifecycle observability (v5.11.0): SubagentStop background_tasks/session_crons
+#
+# Newer CC (v2.1.145+/152+) may include these fields in the SubagentStop payload.
+# If present and non-empty, log a lightweight observability record to
+# task-history.jsonl capturing counts and safe identifiers only.
+# Absence of the fields (older CC) produces no log and no error — fail-open.
+# PRIVACY: we log counts, names/ids only — never payloads or task content.
+# ---------------------------------------------------------------------------
+def _log_lifecycle_observability(payload_str, hist_file, sid, tname):
+    """Parse SubagentStop payload; if background_tasks or session_crons are
+    present and non-empty, append one observability event to task-history.jsonl.
+    All errors are silently swallowed (fail-open)."""
+    if not payload_str:
+        return
+    try:
+        payload = json.loads(payload_str)
+    except (json.JSONDecodeError, ValueError):
+        return  # Not JSON or malformed — older CC or non-SubagentStop call; ignore
+
+    # Extract fields only if they're lists/dicts (defensive typing)
+    bg_tasks    = payload.get("background_tasks")
+    sess_crons  = payload.get("session_crons")
+
+    # Treat absent field (None) and empty list/dict the same: no observability log
+    bg_non_empty   = isinstance(bg_tasks,   list) and len(bg_tasks)   > 0
+    sc_non_empty   = isinstance(sess_crons, list) and len(sess_crons) > 0
+
+    if not bg_non_empty and not sc_non_empty:
+        return  # Fields absent or empty — nothing to log (older CC or no tasks)
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Summarise safely: count + safe identifiers (name/id fields only, no payloads)
+    def _safe_ids(items):
+        """Extract name or id strings from a list of dicts; skip anything else."""
+        ids = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("name") or item.get("id") or item.get("task_id")
+            if label and isinstance(label, str):
+                ids.append(label[:80])  # cap length — defensive
+        return ids
+
+    bg_count  = len(bg_tasks)   if bg_non_empty else 0
+    sc_count  = len(sess_crons) if sc_non_empty else 0
+    bg_ids    = _safe_ids(bg_tasks)   if bg_non_empty else []
+    sc_ids    = _safe_ids(sess_crons) if sc_non_empty else []
+
+    event = {
+        "timestamp": ts,
+        "schema": "1",
+        "event": "subagent-stop-observability",
+        "session_id": sid or "",
+        "teammate": tname or "",
+        "background_tasks_count": bg_count,
+        "session_crons_count": sc_count,
+    }
+    if bg_ids:
+        event["background_task_ids"] = bg_ids
+    if sc_ids:
+        event["session_cron_ids"] = sc_ids
+
+    try:
+        # Direct file I/O append — NOT the tool surface (mirrors pattern used by
+        # other hooks; avoids triggering TASK_HISTORY_WRITE_DENY on tool surface).
+        hist_dir = os.path.dirname(hist_file)
+        if hist_dir:
+            os.makedirs(hist_dir, exist_ok=True)
+        with open(hist_file, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(event) + "\n")
+        _log(f"lifecycle-observability: logged bg_tasks={bg_count} session_crons={sc_count} for session {sid!r}")
+    except OSError as exc:
+        _log(f"lifecycle-observability: failed to write task-history: {exc}")
+
+_log_lifecycle_observability(stdin_input, hist_path, session_id, teammate_name_arg)
 
 # Resolve the teammate's display name from task-history spawn event if session_id is available.
 # The session-role marker holds the role (e.g. "developer"), but team config members use the

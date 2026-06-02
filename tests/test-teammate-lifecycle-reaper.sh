@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# test-teammate-lifecycle-reaper.sh — Test suite for hooks/teammate-lifecycle-reaper (v5.8.2)
+# test-teammate-lifecycle-reaper.sh — Test suite for hooks/teammate-lifecycle-reaper (v5.11.0)
 #
 # Covers the reaper's teammate identity resolution, config.json mutation, and
 # fail-closed behaviors introduced in v5.7.0 and v5.7.1.
+# v5.11.0: adds TC-RL-7 and TC-RL-8 for SubagentStop lifecycle observability.
 #
 # TC-RL-1: SubagentStop for known teammate with valid spawn event → config flag flipped to false
 # TC-RL-2: SubagentStop with resolved_team_name is None (no spawn event) → exit 0, no config modified
@@ -10,6 +11,8 @@
 # TC-RL-4: Corrupted team config JSON → exception logged, no crash, no other teams touched
 # TC-RL-5: SessionEnd fires on all teammates of the ending session
 # TC-RL-6: task-history forgery — reaper refuses to act on out-of-session spawn events
+# TC-RL-7: SubagentStop payload WITH background_tasks/session_crons → observability event logged + reap proceeds + exit 0
+# TC-RL-8: SubagentStop payload WITHOUT background_tasks/session_crons → no observability event + normal behavior + exit 0
 #
 # Run: bash tests/test-teammate-lifecycle-reaper.sh
 # Exit 0 = all pass; exit 1 = at least one failure.
@@ -51,10 +54,12 @@ _make_config() {
 }
 
 # Helper: run the reaper with given env vars
+# Usage: _run_reaper <session_id> [<teammate_marker>] [<tmux_pane>] [<stdin_payload>]
 _run_reaper() {
     local session_id="${1:-}"
     local teammate_marker="${2:-}"
     local tmux_pane="${3:-}"
+    local stdin_payload="${4:-}"
 
     # Write marker file if provided
     if [ -n "$teammate_marker" ]; then
@@ -71,7 +76,7 @@ _run_reaper() {
         CLAUDE_SESSION_ID="${session_id}" \
         CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
         ${tmux_pane:+TMUX_PANE="$tmux_pane"} \
-        bash "$REAPER" 2>/dev/null
+        bash "$REAPER" 2>/dev/null <<< "${stdin_payload}"
     )
     return $?
 }
@@ -385,6 +390,166 @@ if [ $EXIT_CODE -eq 0 ] && [ "$RL6_SECURITY_ACTIVE" = "true" ]; then
 else
     _fail "TC-RL-6: Expected exit 0, security.isActive=true (forged event should have no effect)" \
         "exit=$EXIT_CODE security_active=$RL6_SECURITY_ACTIVE"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-RL-7: SubagentStop payload WITH background_tasks/session_crons →
+#   observability event logged to task-history.jsonl + reap proceeds + exit 0
+# ---------------------------------------------------------------------------
+TEAM7_DIR="$TEAMS_DIR/team-eta"
+TASK_HISTORY7="$FAKE_PROJECT/.claude/ainous-roles/team-sync/state/task-history7.jsonl"
+_make_config "$TEAM7_DIR" '{
+  "leadSessionId": "coord-session-007",
+  "members": [
+    {"name": "ainous-team:developer(eta-task)", "isActive": true}
+  ]
+}'
+
+SESSION_RL7="session-rl7-with-bg-tasks"
+_write_spawn_event "$SESSION_RL7" "ainous-team:developer(eta-task)" "team-eta"
+
+# SubagentStop payload with background_tasks and session_crons (newer CC)
+RL7_PAYLOAD='{"background_tasks":[{"name":"bg-job-1","status":"pending"},{"name":"bg-job-2","status":"running"}],"session_crons":[{"id":"cron-abc","schedule":"*/5 * * * *"}]}'
+
+(
+    cd "$FAKE_PROJECT"
+    HOME="$FAKE_HOME" \
+    CLAUDE_SESSION_ID="$SESSION_RL7" \
+    CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
+    bash "$REAPER" 2>/dev/null <<< "$RL7_PAYLOAD"
+)
+RL7_EXIT=$?
+
+# Verify reap still happened
+RL7_DEV_ACTIVE=$(python3 -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for m in cfg['members']:
+    if m['name'] == 'ainous-team:developer(eta-task)':
+        print(str(m['isActive']).lower())
+        break
+else:
+    print('not-found')
+" "$TEAM7_DIR/config.json" 2>/dev/null || echo "error")
+
+# Verify observability event was written to task-history.jsonl
+RL7_OBS_EVENT=$(python3 -c "
+import json
+events = []
+try:
+    with open('$TASK_HISTORY') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+                if ev.get('event') == 'subagent-stop-observability' and ev.get('session_id') == '$SESSION_RL7':
+                    events.append(ev)
+            except Exception:
+                pass
+except Exception:
+    pass
+if events:
+    ev = events[-1]
+    print(f\"{ev.get('background_tasks_count',0)}:{ev.get('session_crons_count',0)}\")
+else:
+    print('none')
+" 2>/dev/null || echo "error")
+
+if [ $RL7_EXIT -eq 0 ] && [ "$RL7_DEV_ACTIVE" = "false" ] && [ "$RL7_OBS_EVENT" = "2:1" ]; then
+    _pass "TC-RL-7: SubagentStop WITH background_tasks/session_crons → observability logged (bg=2,crons=1), reap proceeded, exit 0"
+else
+    _fail "TC-RL-7: Expected exit 0, dev.isActive=false, observability event bg=2:crons=1" \
+        "exit=$RL7_EXIT dev_active=$RL7_DEV_ACTIVE obs_event=$RL7_OBS_EVENT"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-RL-8: SubagentStop payload WITHOUT background_tasks/session_crons →
+#   no observability event + normal reap behavior + exit 0
+# ---------------------------------------------------------------------------
+TEAM8_DIR="$TEAMS_DIR/team-theta"
+_make_config "$TEAM8_DIR" '{
+  "leadSessionId": "coord-session-008",
+  "members": [
+    {"name": "ainous-team:tester(theta-task)", "isActive": true}
+  ]
+}'
+
+SESSION_RL8="session-rl8-no-bg-tasks"
+_write_spawn_event "$SESSION_RL8" "ainous-team:tester(theta-task)" "team-theta"
+
+# SubagentStop payload WITHOUT background_tasks or session_crons (older CC or empty)
+RL8_PAYLOAD='{"session_id":"session-rl8-no-bg-tasks","stop_hook_active":true}'
+
+# Count observability events before
+RL8_OBS_BEFORE=$(python3 -c "
+import json
+count = 0
+try:
+    with open('$TASK_HISTORY') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+                if ev.get('event') == 'subagent-stop-observability' and ev.get('session_id') == '$SESSION_RL8':
+                    count += 1
+            except Exception:
+                pass
+except Exception:
+    pass
+print(count)
+" 2>/dev/null || echo "0")
+
+(
+    cd "$FAKE_PROJECT"
+    HOME="$FAKE_HOME" \
+    CLAUDE_SESSION_ID="$SESSION_RL8" \
+    CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
+    bash "$REAPER" 2>/dev/null <<< "$RL8_PAYLOAD"
+)
+RL8_EXIT=$?
+
+# Verify reap happened normally
+RL8_TESTER_ACTIVE=$(python3 -c "
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for m in cfg['members']:
+    if m['name'] == 'ainous-team:tester(theta-task)':
+        print(str(m['isActive']).lower())
+        break
+else:
+    print('not-found')
+" "$TEAM8_DIR/config.json" 2>/dev/null || echo "error")
+
+# Count observability events after — should be same as before (no new event)
+RL8_OBS_AFTER=$(python3 -c "
+import json
+count = 0
+try:
+    with open('$TASK_HISTORY') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+                if ev.get('event') == 'subagent-stop-observability' and ev.get('session_id') == '$SESSION_RL8':
+                    count += 1
+            except Exception:
+                pass
+except Exception:
+    pass
+print(count)
+" 2>/dev/null || echo "0")
+
+if [ $RL8_EXIT -eq 0 ] && [ "$RL8_TESTER_ACTIVE" = "false" ] && [ "$RL8_OBS_AFTER" = "$RL8_OBS_BEFORE" ]; then
+    _pass "TC-RL-8: SubagentStop WITHOUT background_tasks/session_crons → no observability event written, reap proceeded, exit 0"
+else
+    _fail "TC-RL-8: Expected exit 0, tester.isActive=false, no new observability event" \
+        "exit=$RL8_EXIT tester_active=$RL8_TESTER_ACTIVE obs_before=$RL8_OBS_BEFORE obs_after=$RL8_OBS_AFTER"
 fi
 
 # ---------------------------------------------------------------------------

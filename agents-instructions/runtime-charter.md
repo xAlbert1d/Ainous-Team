@@ -61,7 +61,10 @@ Event types:
 {"type": "routing-decision", "timestamp": "ISO-8601", "task_id": "<task-id>", "typed_candidates": [...], "filtered": ["<role>: <reason>"], "selected": "DELEGATE_ROLE", "role": "<role>", "topology": "<topology-name>", "phases": ["<phase-list>"]}
 {"timestamp": "ISO-8601", "event": "HALT", "role": "<role>", "phase": "<phase>", "reason": "<specific defect — what was found>", "evidence": "<what was observed that triggers the halt>"}
 {"timestamp": "ISO-8601", "event": "framing-doubt", "role": "<role>", "phase": "<phase>", "doubt": "<what feels wrong about the problem framing>", "blocking": false}
+{"timestamp": "ISO-8601", "schema": "1", "event": "subagent-stop-observability", "session_id": "<sid>", "teammate": "<name>", "background_tasks_count": 2, "session_crons_count": 1, "background_task_ids": ["..."], "session_cron_ids": ["..."]}
 ```
+
+**SubagentStop lifecycle observability (v5.11.0):** `hooks/teammate-lifecycle-reaper` reads the SubagentStop payload (available in newer CC v2.1.145+/152+). When `background_tasks` or `session_crons` are present and non-empty, it appends one `subagent-stop-observability` event to `task-history.jsonl` via direct file I/O (never the tool surface). The event captures counts and safe name/id identifiers only — no payloads or task content. When these fields are absent (older CC) or empty, nothing is logged and no error is produced. The existing reaper behavior (flipping `isActive: false` in team config) runs unconditionally regardless of observability outcome.
 
 **HALT authorization**: Every role is explicitly authorized to emit a HALT event when it detects a defect that will propagate downstream if not addressed. HALT is a quality signal, not a failure — framing it as failure suppresses the signal. Coordinator reads HALT events before proceeding to the next phase and treats them as verification gate failures.
 
