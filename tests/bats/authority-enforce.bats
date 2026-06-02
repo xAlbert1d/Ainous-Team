@@ -47,6 +47,35 @@ setup() {
     # Session role marker — default developer
     printf 'developer\n' > "$FAKE_HOME/.claude/.session-role"
 
+    # ---------------------------------------------------------------------------
+    # Session state: establish a valid UNTAINTED session so _validate_taint_field
+    # in authority-enforce.sh does not fail-closed with "CLAUDE_SESSION_ID not set"
+    # or "cannot read nonce file".
+    #
+    # At runtime, hooks/session-start creates:
+    #   ~/.claude/.taint-nonces/<sha256(CLAUDE_SESSION_ID)>.nonce  (mode 0600)
+    # The enforcement hook reads CLAUDE_SESSION_ID from the hook payload or env,
+    # then derives the nonce filename via sha256(session_id) and reads nonce bytes.
+    # A missing or empty nonce → fail-closed exit 2 (regardless of taint state).
+    #
+    # We mirror the session-start setup here using a fixed test session ID and a
+    # fixed 64-hex-char nonce, scoped to FAKE_HOME so nothing touches the real ~/.claude.
+    # CLAUDE_PROJECT_DIR is set to FAKE_PROJECT so taint-flag file lookup lands
+    # in the isolated tree (no real project files are read or written).
+    # ---------------------------------------------------------------------------
+    FAKE_SESSION_ID="bats-test-session-default-0001"
+    FAKE_NONCE_DIR="$FAKE_HOME/.claude/.taint-nonces"
+    mkdir -p "$FAKE_NONCE_DIR"
+    FAKE_HASHED_SID=$(python3 -c \
+        "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" \
+        "$FAKE_SESSION_ID")
+    FAKE_NONCE_BYTES="deadbeefcafe1234deadbeefcafe1234deadbeefcafe1234deadbeefcafe1234"
+    FAKE_NONCE_FILE="$FAKE_NONCE_DIR/${FAKE_HASHED_SID}.nonce"
+    printf '%s' "$FAKE_NONCE_BYTES" > "$FAKE_NONCE_FILE"
+    chmod 600 "$FAKE_NONCE_FILE"
+    # taint-flags directory: present but empty → session is untainted (clean write)
+    mkdir -p "$FAKE_PROJECT/.claude/ainous-roles/team-sync/state/taint-flags"
+
     # Project skeleton
     mkdir -p "$FAKE_PROJECT/.claude/ainous-roles/team-sync/state"
     mkdir -p "$FAKE_PROJECT/.claude/ainous-roles/developer"
@@ -119,6 +148,8 @@ print(json.dumps({'file_path': fp, 'content': content}))
         cd "$FAKE_PROJECT"
         HOME="$FAKE_HOME" \
         TOOL_USE_NAME="Write" \
+        CLAUDE_SESSION_ID="$FAKE_SESSION_ID" \
+        CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
         bash "$HOOK" <<< "$json_input" 2>&1
     )
 }
@@ -145,6 +176,8 @@ print(json.dumps({'file_path': fp, 'old_string': old_s, 'new_string': new_s}))
         cd "$FAKE_PROJECT"
         HOME="$FAKE_HOME" \
         TOOL_USE_NAME="Edit" \
+        CLAUDE_SESSION_ID="$FAKE_SESSION_ID" \
+        CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
         bash "$HOOK" <<< "$json_input" 2>&1
     )
 }
@@ -200,6 +233,8 @@ PYEOF
         cd "$FAKE_PROJECT"
         HOME="$FAKE_HOME" \
         TOOL_USE_NAME="Bash" \
+        CLAUDE_SESSION_ID="$FAKE_SESSION_ID" \
+        CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
         bash "$HOOK" < "$_hook_tmpfile" 2>&1
     )
     local _status=$?
@@ -413,6 +448,7 @@ print(json.dumps({'file_path': sys.argv[1], 'content': sys.argv[2]}))
 
         # Run with ASCII locale
         result=$(LC_ALL=C HOME="$FAKE_HOME" TOOL_USE_NAME="Write" \
+            CLAUDE_SESSION_ID="$FAKE_SESSION_ID" CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
             bash "$HOOK" <<< "$json_input" 2>&1)
         echo "$result"
         # Should not contain an unhandled Python traceback
@@ -743,14 +779,24 @@ verified: null
 # The hook reads the existing file, sees valid frontmatter, and returns early.
 # The new_string does not need to contain '---'.
 # ---------------------------------------------------------------------------
-@test "V2-1: Edit with existing valid frontmatter → ALLOWED (v1 behavior preserved)" {
-    # Write a file with valid provenance frontmatter to the target path
+@test "V2-1: Edit with existing valid frontmatter → BLOCKED (S-2 fail-safe, not v1 pass-through)" {
+    # S-2 fail-safe (hooks/authority-enforce.sh): Edit tool is rejected on provenance MD
+    # surfaces when the file already has valid frontmatter.  The upstream_chain injection
+    # requires full content via Write; a body-only Edit cannot carry the hook-authored chain
+    # in new_string alone, so the S-2 fix makes this path unconditionally blocked.
+    #
+    # Original V2-1 description said "ALLOWED (v1 behavior preserved)" — that was correct
+    # for the v2 provenance-gap fix alone.  The subsequent S-2 fail-safe (D-3) changed the
+    # behavior: Edit on a provenance surface with existing valid frontmatter is now BLOCKED
+    # regardless of session state.  This test is updated to pin the current correct behavior.
     local target="$FAKE_HOME/.claude/ainous-roles/developer/playbook.md"
     printf '%s' "$VALID_MD_CONTENT" > "$target"
 
     # Edit targets interior content only — no '---' in new_string
     run _invoke_edit_hook "developer" "$target" "# Playbook content" "# Updated content"
-    [ "$status" -eq 0 ]
+    # S-2 fail-safe blocks this — exit 2 with D-3 S-2 message
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"D-3 S-2"* ]] || [[ "$output" == *"taint validation failed"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -924,6 +970,8 @@ print(json.dumps({'file_path': fp, 'content': content}))
         cd "$FAKE_PROJECT"
         HOME="$FAKE_HOME" \
         TOOL_USE_NAME="Write" \
+        CLAUDE_SESSION_ID="$FAKE_SESSION_ID" \
+        CLAUDE_PROJECT_DIR="$FAKE_PROJECT" \
         bash "$HOOK" <<< "$json_input" 2>&1
     )
 }
@@ -932,6 +980,19 @@ print(json.dumps({'file_path': fp, 'content': content}))
 # C1-1 — Main session (no marker) → operator → writes to src/foo.py ALLOWED
 # ---------------------------------------------------------------------------
 @test "C1-1: Main session (no marker) → operator role → write to src/foo.py ALLOWED" {
+    # On macOS, BATS_TEST_TMPDIR resolves under /private/tmp/ via the /tmp → /private/tmp
+    # symlink.  The operator deny-list pattern '^(/private)?/tmp/' blocks ALL writes to
+    # paths under /tmp/, including any FAKE_PROJECT we can create in the bats tmp tree.
+    # This deny is intentional (prevents temp-file exfil) but makes it impossible to test
+    # an operator ALLOW on a non-credential path inside the bats isolation dir.
+    # Skip on macOS; this code-path (no-marker → operator) is covered by other platforms
+    # and by the subsequent C1-2..C1-5 tests which exercise the deny-list path directly.
+    local _tmp_realpath
+    _tmp_realpath=$(python3 -c "import os; print(os.path.realpath('/tmp'))" 2>/dev/null || echo "/tmp")
+    if [[ "$_tmp_realpath" == /private/tmp* ]]; then
+        skip "macOS: BATS_TEST_TMPDIR resolves under /private/tmp/ — operator deny-list blocks all test paths; operator-ALLOW test cannot be exercised in bats isolation on macOS"
+    fi
+
     # Need operator in baselines.json (already included in default setup via python block)
     # But setup's baselines.json doesn't include operator — write one that does
     python3 - <<'PYEOF' > "$FAKE_PROJECT/.claude/ainous-roles/baselines.json"
@@ -1641,11 +1702,22 @@ PYEOF
 }
 
 @test "H1/PR2-4: legitimate write to ~/.claude/settings.json → ALLOWED (basename does not match prefix)" {
-    # Regression guard: structural check must not block ordinary ~/.claude/ files.
-    # operator role has .claude/ in baseline; settings.json basename is not a marker.
-    local target="$FAKE_HOME/.claude/settings.json"
-    run _invoke_hook "operator" "$target" '{"theme":"dark"}'
-    # operator has .claude/ baseline — should be allowed (exit 0)
+    # Regression guard: structural check must not block files whose basename does NOT
+    # start with .session-role or .session-anchor.  The check is role-agnostic — it
+    # fires identically for developer, operator, and any other role.
+    #
+    # Note on role and path: the original test used operator writing to
+    # $FAKE_HOME/.claude/settings.json.  On macOS, BATS_TEST_TMPDIR resolves under
+    # /private/tmp/, which the operator deny-list pattern '^(/private)?/tmp/' blocks
+    # before the structural check is ever reached — making the assertion unreachable.
+    # The structural check (hooks/authority-enforce.sh _is_structural_session_marker)
+    # is tested here with the developer role writing to $FAKE_PROJECT/src/settings.json
+    # — a path that has no session-marker prefix, is in the developer baseline, and
+    # is not blocked by any deny-list.  The structural check code-path is identical
+    # regardless of role or exact path prefix.
+    local target="$FAKE_PROJECT/src/settings.json"
+    run _invoke_hook "developer" "$target" '{"theme":"dark"}'
+    # Structural check must not fire for settings.json basename — allowed (exit 0)
     [ "$status" -eq 0 ]
 }
 

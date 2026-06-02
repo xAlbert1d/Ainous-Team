@@ -123,7 +123,7 @@ def parse_yaml_simple(path):
                 k = m.group(1)
                 v = m.group(2).strip()
                 if v == '' or v == '[]':
-                    result[k] = [] if v == '[]' else None
+                    result[k] = []
                     current_key = k
                     in_list = True
                 else:
