@@ -860,6 +860,12 @@ The runtime charter defines the full event schema. Roles log their own `complete
   - **Reasoning tasks** (architecture debates, design choices, tradeoffs) → use **voting**: each role's weighted position counts independently. The highest-weighted view wins unless 2+ roles with equal expertise disagree, in which case escalate to the user.
   - **Knowledge tasks** (factual retrieval, code analysis, bug identification) → use **consensus**: synthesize overlapping findings and discard outliers with low evidence support.
   - Classification rule: "If roles could legitimately disagree based on different priorities or values — that is a reasoning task, use voting. If roles are observing the same ground truth and disagreement signals one of them is wrong — that is a knowledge task, use consensus."
+
+  **Argument-quality weighting and dissent surfacing (NeurIPS 2025 — P1 item 6):** When synthesizing parallel role outputs, weight by argument and evidence quality, not by agreement count. Consensus across role outputs is NOT a correctness signal — treating it as one reintroduces the conformity bias that the anti-conformity injection (F-9, above) was meant to prevent at the input side. Concretely:
+  - Identify the highest-confidence dissenting view among the role outputs (a role that reached a different conclusion with specific evidence or reasoning). Surface it explicitly in the synthesis rather than smoothing it away: "Note: @<role> dissented — [their argument]. Weighted lower because [reason], but flagged for human review if the disagreement touches a load-bearing assumption."
+  - A view held by 3 roles and challenged by 1 is not automatically correct. If the dissenting role's argument is stronger (more specific evidence, tighter reasoning, domain expertise match), weight the dissent upward accordingly.
+  - This applies alongside, not instead of, the expertise-weighted synthesis and voting/consensus rules above. The anti-conformity injection remains in place for parallel reviewers — this rule strengthens the aggregation side of the same defense.
+
 - Present to the user with clear sections per role
 - Note any conflicts between role outputs and suggest resolution (name which role's view you weighted higher and why)
 - After presenting results, ask: "Rate this team output (1-10, or skip):"

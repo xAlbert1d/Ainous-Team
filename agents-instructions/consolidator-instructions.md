@@ -248,6 +248,19 @@ with review_file.open("a") as f:
 
 **Residual-risk label (prompt-level discipline, not hook-enforced):** "Transitive taint is consolidator discipline, not hook-enforced. Any non-empty upstream_chain gates auto-promotion. Hook validates file-in-isolation."
 
+### Semantic-Taint Corroboration Gate (NeuroTaint — P1 item 4)
+
+Taint propagates via semantic influence into memory writes, not only verbatim output. A learning or fact whose provenance indicates it originated in a tainted session — signaled by a non-empty `upstream_chain` on the carrier entry, OR by the carrier's `source` field being `external-unsanitized` or `legacy-unverified` because the session was taint-flagged — MUST NOT be promoted to `"verified": true` status until an independent, untainted session corroborates the same claim.
+
+Until corroborated:
+- The entry retains its lower source-type (e.g., `"source": "inferred"` or `"source": "observed"`) — do not upgrade it.
+- It is excluded from high-trust promotion paths: it cannot become a team-knowledge.md fact, a playbook strategy at `ha` or `ri` maturity, or a `[cross-role]` canonical insight.
+- The `verified` field on the entry (in learnings.jsonl or team-knowledge.md) must remain `false` or absent.
+
+Corroboration requires: (a) a subsequent session whose provenance block shows `upstream_chain: []` and `source` is `observed` or `self-described`, and (b) the new session independently reaches the same conclusion without the tainted entry in its injected context. When corroborated, the consolidator may promote the entry and set `"verified": true`, citing both the original and the corroborating session in the provenance block.
+
+This rule is consolidator discipline, not hook-enforced. Apply it during Phase 3 (Consolidate) whenever a candidate promotion's source entries include any carrier with a non-empty `upstream_chain`.
+
 ### Tiered Blocking Read/Apply Flow
 
 **Insert this flow at the top of Phase 3, before any playbook write.** After reading `promotion-review.jsonl` but before applying any promotion:
@@ -511,6 +524,11 @@ Read growth.json for strategy-to-score correlations:
 - Strategies used in sessions scoring 8+ → reinforce
 - Strategies used in sessions scoring 4- → flag for retirement
 - If journal patterns suggest a new strategy → add to "Current Strategies"
+
+**Utility field population (explicit step — DGM / P1 item 5):** When consolidating each role's `learnings.jsonl`, populate the `utility` field on every entry using the scoring conventions defined in Phase 2 (§Update learnings utility scores): +2 for a session-outcome success, +1 for a reference event, −1 for a session-outcome failure, −2 for a contradiction. This is a required consolidation step, not optional. If the field is absent, treat it as 0.
+
+**Utility validation gate:** A playbook strategy edit or promotion should be KEPT only if its associated `utility` trend is non-negative after N=3 subsequent sessions. Concretely: after promoting or editing a strategy, track the sum of `utility` deltas on its correlated `learnings.jsonl` entries over the next 3 consolidation cycles. If the cumulative utility across those N sessions remains ≤ 0, the strategy is a retirement candidate — flag it with `[utility-retiring]` and move to "Retired Strategies" at the next cycle unless a positive session reverses the trend. The mechanical input for this decision is `scripts/memory-maintain.py --check`, which surfaces the lowest-utility candidates in its output log; the script provides the data, the consolidator makes the retirement decision. This replaces "keep because it sounds useful" with "keep because utility held or improved."
+
 - **Tag strategies by source:** Mark each new strategy as `[from-failure]` (derived from a session that went wrong) or `[from-success]` (derived from a session that went well). Research shows failure-derived strategies are better for exploration/research tasks, while success-derived strategies are better for implementation/execution tasks. The retriever can weight these differently based on task type.
 - **Enforce heuristic format:** Every strategy must follow: "**When** <specific trigger condition>, **do** <concrete action>, **because** <the failure this prevents>." Strategies without a clear trigger condition are too vague to be useful.
 - Move retired strategies to "Retired Strategies" with the reason
