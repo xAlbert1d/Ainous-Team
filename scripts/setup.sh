@@ -27,6 +27,8 @@ ROLES_DIR="$HOME/.claude/ainous-roles"
 OLD_ROLES_DIR="$HOME/.claude/persistent-roles"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATES="$(cd "$SCRIPT_DIR/../templates" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROLES_DIR="${PROJECT_ROOT}/.claude/ainous-roles"
 
 # Migrate from old directory name if it exists
 if [ -d "$OLD_ROLES_DIR" ] && [ ! -d "$ROLES_DIR" ]; then
@@ -66,6 +68,17 @@ for role in coordinator developer architect code-quality tester researcher write
         metric="$(get_metric "$role")"
         sed -e "s/ROLE_NAME/$role/" -e "s/METRIC_NAME/$metric/" "$TEMPLATES/growth.json" > "$ROLES_DIR/$role/growth.json"
         echo "  Created growth.json for $role (metric: $metric)"
+    fi
+
+    # Project-level scaffold: journal.md and learnings.jsonl (.claude/ainous-roles/<role>/)
+    mkdir -p "$PROJECT_ROLES_DIR/$role"
+    if [ ! -f "$PROJECT_ROLES_DIR/$role/journal.md" ]; then
+        sed -e "s/\[Role\]/$role/" "$TEMPLATES/journal.md" > "$PROJECT_ROLES_DIR/$role/journal.md"
+        echo "  Created project journal.md for $role"
+    fi
+    if [ ! -f "$PROJECT_ROLES_DIR/$role/learnings.jsonl" ]; then
+        : > "$PROJECT_ROLES_DIR/$role/learnings.jsonl"
+        echo "  Created project learnings.jsonl for $role"
     fi
 done
 
