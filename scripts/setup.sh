@@ -54,11 +54,12 @@ get_metric() {
         consolidator)  echo "distillation_quality" ;;
         retriever)     echo "retrieval_relevance" ;;
         signal)        echo "signal_relevance" ;;
+        designer)      echo "design_fitness" ;;
         *)             echo "unknown_metric" ;;
     esac
 }
 
-for role in coordinator developer architect code-quality tester researcher writer security authority consolidator retriever signal; do
+for role in coordinator developer architect code-quality tester researcher writer security authority consolidator retriever signal designer; do
     mkdir -p "$ROLES_DIR/$role"
     if [ ! -f "$ROLES_DIR/$role/playbook.md" ]; then
         cp "$TEMPLATES/playbook.md" "$ROLES_DIR/$role/playbook.md"
@@ -128,7 +129,8 @@ generate_baselines() {
   "signal": ["*.md", "*.json", ".claude/ainous-roles/signal/"],
   "authority": ["*.md", ".claude/ainous-roles/authority/"],
   "retriever": [],
-  "coordinator": ["*.md", "*.json", "*.jsonl", "*.yaml", "*.yml", ".claude/", ".claude/ainous-roles/"]
+  "coordinator": ["*.md", "*.json", "*.jsonl", "*.yaml", "*.yml", ".claude/", ".claude/ainous-roles/"],
+  "designer": ["assets/", "design/", "styles/", ".claude/ainous-roles/team-sync/artifacts/", ".claude/ainous-roles/designer/"]
 }
 BASEEOF
     echo "  Generated baselines.json (Layer 1 authority enforcement)"

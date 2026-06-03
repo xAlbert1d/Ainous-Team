@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 12 roles, 63 skills, that learn and improve over time. v5.17.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.18.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -31,7 +31,7 @@ After installing the plugin, Claude Code will prompt you to initialize on the ne
 /team-init
 ```
 
-This interactive command walks you through choosing your operating mode and then scaffolds `~/.claude/ainous-roles/` with starter files for all 12 roles. The setup is idempotent — running it again won't overwrite existing data.
+This interactive command walks you through choosing your operating mode and then scaffolds `~/.claude/ainous-roles/` with starter files for all 13 roles. The setup is idempotent — running it again won't overwrite existing data.
 
 **Mode options:**
 
@@ -102,7 +102,7 @@ The coordinator has Write/Bash for journal writes but delegates all implementati
 
 ```
 ainous-team plugin
-|-- 12 agents        -- coordinator, developer, architect, code-quality, tester,
+|-- 13 agents        -- coordinator, developer, architect, designer, code-quality, tester,
 |                       researcher, writer, security, authority, consolidator, retriever, signal
 |-- 63 skills        -- domain-expertise (see Skills Vault below)
 |-- 8 commands       -- /team-status, /team-history, /team-alerts, /team-retro, /team-signal,
@@ -285,13 +285,16 @@ Trust-aware: Intern roles are blocked from all writes. Senior roles get expanded
 | **tester** | magenta | Tests, coverage, edge cases | Read, Write, Edit, Grep, Glob, Bash | Test files only |
 | **researcher** | green | Exploration, investigation | Read, Grep, Glob, Bash, WebSearch, WebFetch | Research notes |
 | **writer** | cyan | Documentation, READMEs | Read, Write, Edit, Grep, Glob | Docs, *.md files |
+| **designer** | magenta | Brand, UX, UI, design systems | Read, Write, Edit, Grep, Glob | Design specs + assets |
 | **security** | yellow | Vulnerabilities, threats | Read, Write, Edit, Grep, Glob, Bash, Agent | Security reports |
 | **authority** | -- | Approvals, policy | Read, Write, Edit, Grep, Glob, Bash, Agent | Authority-book, decisions |
 | **consolidator** | -- | Knowledge distillation | Read, Write, Edit, Grep, Glob, Bash | Playbooks, growth.json |
 | **signal** | cyan | External intelligence | Read, Write, Grep, Glob, Bash, WebSearch, WebFetch | Team-knowledge, signal journals |
 | **retriever** | -- | Context filtering | Read, Grep, Glob, Agent | Read-only |
 
-Colors use a 4-color mosaic: green (builder/explorer), cyan (design/docs), yellow (reviewers), magenta (tester). Infrastructure roles (coordinator, authority, consolidator, retriever) have no color. Signal uses cyan (information/exploration).
+The **designer** role owns brand identity, UX flows, UI, and design systems — and drives the `image-*` family for visual assets — deferring to @architect on feasibility and @authority before publishing brand assets.
+
+Colors use a 4-color mosaic: green (builder/explorer), cyan (design/docs), yellow (reviewers), magenta (tester/designer). Infrastructure roles (coordinator, authority, consolidator, retriever) have no color. Signal uses cyan (information/exploration).
 
 ## Governance
 
@@ -335,7 +338,7 @@ ainous-team/                             <-- the plugin
 |-- authority/authority-book.md          <-- permission matrix
 |-- authority/decisions.md               <-- approval audit trail
 |-- consolidator/cross-role-insights.md  <-- patterns across 3+ roles
-\-- ... (11 roles × playbook + growth.json)
+\-- ... (13 roles × playbook + growth.json)
 
 <project>/.claude/ainous-roles/      <-- project-specific data (created at runtime)
 |-- team-knowledge.md                    <-- project-specific shared facts
@@ -348,6 +351,21 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.18.0
+
+Adds a **13th role — `designer`** (sonnet) for brand identity, UX flows, UI, design systems, and design
+review; it owns the `image-*` skill family for visual-asset generation, defers to @architect on technical
+feasibility, and requires @authority before publishing brand assets. Least-privilege authority: designer
+writes design specs + assets only, scoped to `design/`, `assets/`, `styles/`, and the team artifacts dir.
+
+Building the role surfaced and fixed two real pre-existing bugs that the trust-audit and authority checks
+caught: (1) the shipped `templates/growth.json` pre-seeded **every** role as `junior` (score 50) — an
+unearned trust level at 0 sessions, a violation on every fresh install — now corrected to `intern`/0;
+(2) the new role's Layer-1 baseline was tightened from bare extension globs (`*.md`, `*.css`, …) to
+directory-scoped paths, because bare globs match by basename anywhere in the tree (a systemic property of
+the Layer-1 design that also affects legacy content roles — flagged separately for a future hardening pass).
+13 roles, 63 skills; all 6 pre-ship gates green; bats 159/159; designer least-privilege independently verified.
 
 ## What's new in v5.17.0
 
@@ -511,7 +529,7 @@ The team is not a collection of agents — it is itself an agent at a higher lay
 ```
 Cell        → Role         (individual capability, one function)
 Organ       → Role cluster (researcher+architect = "understanding")
-Organism    → Team         (11 roles, one coherent output)
+Organism    → Team         (13 roles, one coherent output)
 ```
 
 **Embed, don't repeat.** Each layer wraps the lower layer's capability as a black box. The coordinator doesn't know HOW the developer writes code — only WHEN to invoke it. If two roles produce overlapping output, the consolidator detects this and recommends specialization.

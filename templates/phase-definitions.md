@@ -25,14 +25,14 @@ Phases are data, not instructions. The coordinator decides WHICH phases to run (
 ## phase: design
 
 **Entry criteria:** `artifacts/researcher-findings.md` exists OR task scope is clear from user request
-**Exit criteria:** `artifacts/architect-design.md` exists with component boundaries and interfaces
-**Roles:** architect
-**Parallel:** false
+**Exit criteria:** `artifacts/architect-design.md` exists with component boundaries and interfaces; `artifacts/designer-spec.md` exists when UX/UI/brand work is in scope
+**Roles:** architect (structure/feasibility), designer (UX/UI/brand — conditional on design scope)
+**Parallel:** true when both architect and designer are active (separate artifacts, no cross-dependency)
 **Default skills:** design, api-design, premise-check, diagram, verify
-**Artifacts produced:** architect-design.md
+**Artifacts produced:** architect-design.md, designer-spec.md (when designer is active)
 **Artifacts consumed:** researcher-findings.md
 **Max retries:** 2
-**Context instructions:** Read researcher-findings first. Validate the premise before designing (premise-check). Design for the constraints discovered. Produce concrete interfaces, not abstract descriptions. Include a Mermaid diagram of the architecture.
+**Context instructions:** Read researcher-findings first. Validate the premise before designing (premise-check). Design for the constraints discovered. Produce concrete interfaces, not abstract descriptions. Include a Mermaid diagram of the architecture. When designer is active: architect owns structural feasibility; designer owns UX/UI/brand — they produce separate artifacts and should not block each other.
 
 ---
 
@@ -44,9 +44,9 @@ Phases are data, not instructions. The coordinator decides WHICH phases to run (
 **Parallel:** false (but may run parallel with test phase in fast-fix)
 **Default skills:** tdd, debug, verify, review-response
 **Artifacts produced:** (code changes — verified by test pass)
-**Artifacts consumed:** architect-design.md
+**Artifacts consumed:** architect-design.md, designer-spec.md (when present — developer reads designer-spec for component states, tokens, and interaction rules)
 **Max retries:** 3
-**Context instructions:** Read architect-design first. Follow the designed interfaces. Write tests alongside code. Apply deviation rules: auto-fix bugs (Rule 1-3), STOP for architectural concerns (Rule 4).
+**Context instructions:** Read architect-design first. If designer-spec.md exists, read it for UI component states, design tokens, and accessibility requirements before implementing any UI layer. Follow the designed interfaces. Write tests alongside code. Apply deviation rules: auto-fix bugs (Rule 1-3), STOP for architectural concerns (Rule 4).
 
 ---
 
@@ -68,13 +68,13 @@ Phases are data, not instructions. The coordinator decides WHICH phases to run (
 
 **Entry criteria:** Tests pass, implementation complete
 **Exit criteria:** All CRITICAL findings resolved; `artifacts/security-findings.md` and `artifacts/code-quality-findings.md` exist
-**Roles:** security, code-quality
+**Roles:** security, code-quality; designer (conditional — when UI/UX changes are in scope, reviews for accessibility and design-spec conformance)
 **Parallel:** true (independent parallel review)
 **Default skills:** security-scan, threat-model, verify, code-review-ext, refactor
 **Artifacts produced:** security-findings.md, code-quality-findings.md
 **Artifacts consumed:** (reads code directly via git diff)
 **Max retries:** 2 (loops with implement phase for fixes)
-**Context instructions:** Independent parallel review. Each reviewer produces its own artifact. Do not coordinate with each other — independent perspectives are more valuable than consensus. Apply two-pass severity separation: CRITICAL first, INFORMATIONAL second.
+**Context instructions:** Independent parallel review. Each reviewer produces its own artifact. Do not coordinate with each other — independent perspectives are more valuable than consensus. Apply two-pass severity separation: CRITICAL first, INFORMATIONAL second. When designer reviews: focus on accessibility conformance, design-spec deviation, and interaction-state completeness — not code quality (that's code-quality's domain).
 
 ---
 

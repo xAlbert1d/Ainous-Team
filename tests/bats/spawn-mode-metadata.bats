@@ -14,23 +14,21 @@
 PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 CAPS_DIR="$PROJECT_ROOT/agents/capabilities"
 
-# All 11 role capability files (index.json excluded)
-ROLE_FILES=(
-  architect.json
-  authority.json
-  code-quality.json
-  consolidator.json
-  coordinator.json
-  developer.json
-  researcher.json
-  retriever.json
-  security.json
-  signal.json
-  tester.json
-  writer.json
-)
+# Dynamically discover all role capability files (index.json excluded).
+# This avoids stale hardcoded lists when roles are added or removed.
+load_role_files() {
+  ROLE_FILES=()
+  for f in "$CAPS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    [ "$base" = "index.json" ] && continue
+    ROLE_FILES+=("$base")
+  done
+}
 
 @test "every capability JSON has a preferred_spawn_mode field" {
+  load_role_files
+  [ "${#ROLE_FILES[@]}" -gt 0 ] || fail "No capability JSON files found in $CAPS_DIR"
   for role_file in "${ROLE_FILES[@]}"; do
     path="$CAPS_DIR/$role_file"
     [ -f "$path" ] || fail "Missing capability file: $role_file"
@@ -46,6 +44,8 @@ if 'preferred_spawn_mode' not in d:
 }
 
 @test "every preferred_spawn_mode value is one of {agent, tmux, auto}" {
+  load_role_files
+  [ "${#ROLE_FILES[@]}" -gt 0 ] || fail "No capability JSON files found in $CAPS_DIR"
   valid_values='{"agent", "tmux", "auto"}'
   for role_file in "${ROLE_FILES[@]}"; do
     path="$CAPS_DIR/$role_file"

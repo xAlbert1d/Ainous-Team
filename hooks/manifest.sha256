@@ -5,7 +5,7 @@
 # tamper-EVIDENCE, not tamper-PROOFing — see gen-hook-manifest.sh header.
 2e2d9247606196e9b153b0a6e7beb500155e805cb39898682e41553bd8ebed15  hooks/_hmac_common.py
 0c606f7ebd68c4f3cdd556d2a5817ea7ab94a69fceb4eba96b5f74a14af33c1c  hooks/_provenance_common.py
-69ef04a22ad19ac6077df2645b218d9c4db3c3e7128002ec93fb5463b3b8fc25  hooks/authority-enforce.sh
+c3945c0d13559e3a1212aebd23cb0eba239c48659f4635f72f8252d79862a235  hooks/authority-enforce.sh
 27296c1d30a3ce857592b027fa4d3f0eb4b9300c77f936ce5849e98937fdeaa0  hooks/session-end
 a06a1156987d53defd2ce131589524218ac2b77762493a5ab005b4914faf3331  hooks/session-start
 d86480dd5b92553311b05d47561679dcb38adc82d058abaccd0cb25322228ffc  hooks/skill-telemetry

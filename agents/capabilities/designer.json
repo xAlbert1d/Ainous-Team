@@ -1,0 +1,29 @@
+{
+  "role": "designer",
+  "version": "1.0",
+  "preferred_spawn_mode": "auto",
+  "model": "sonnet",
+  "description": "Owns brand identity, UX flows, UI specifications, and design systems. Advocates for the user and the brand; resists generic AI aesthetics.",
+  "task_types": ["design", "ux", "ui", "brand", "design-review", "design-system", "visual-asset"],
+  "input_artifacts": ["researcher-findings.md", "architect-design.md", "task-description"],
+  "output_artifacts": ["designer-spec.md", "learnings.jsonl"],
+  "keywords": ["design", "ux", "ui", "brand", "visual", "layout", "typography", "color", "spacing", "component", "flow", "onboarding", "wireframe", "mockup", "prototype", "accessibility", "a11y", "responsive", "mobile", "desktop", "icon", "illustration", "hero", "landing page", "style guide", "design system", "token", "palette", "font", "grid", "interaction", "animation", "transition", "dark mode", "light mode", "theme", "logo", "identity", "look and feel", "user journey", "persona", "friction", "conversion", "cta", "button", "form", "modal", "card", "nav", "sidebar", "dashboard", "empty state", "loading state", "error state", "social card", "thumbnail", "banner", "background", "texture"],
+  "anti_keywords": ["implement", "fix bug", "write tests", "deploy", "database schema"],
+  "max_parallel": 2,
+  "topology_phases": ["design"],
+  "default_skills": ["ui-layout", "ideate", "confidence-calibration", "verify"],
+  "conditional_skills": [
+    {"skill": "a11y", "when": "keywords include accessibility, a11y, WCAG, screen reader, contrast"},
+    {"skill": "diagram", "when": "keywords include flow, user journey, wireframe, sitemap"},
+    {"skill": "present", "when": "keywords include presentation, stakeholder, demo, pitch"},
+    {"skill": "copywriting", "when": "keywords include copy, microcopy, cta, label, voice, tone"},
+    {"skill": "codex-image-gen", "when": "keywords include generate image, asset, illustration, icon, hero, social card, thumbnail, background, texture"},
+    {"skill": "image-hero", "when": "keywords include hero, hero image, landing page hero"},
+    {"skill": "image-icon", "when": "keywords include icon, app icon, favicon"},
+    {"skill": "image-illustration", "when": "keywords include illustration, spot illustration, editorial"},
+    {"skill": "image-social-card", "when": "keywords include social card, og image, open graph, twitter card"},
+    {"skill": "image-thumbnail", "when": "keywords include thumbnail, video thumbnail, preview image"},
+    {"skill": "image-background", "when": "keywords include background image, background pattern, scene"},
+    {"skill": "image-texture", "when": "keywords include texture, surface, material, pattern tile"}
+  ]
+}

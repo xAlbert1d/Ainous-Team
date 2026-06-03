@@ -7,7 +7,7 @@
 ## 1. What it is
 
 A **persistent agent-team plugin for Claude Code**, built by xdimension.ai. It turns a single
-Claude session into a coordinator that delegates work to **12 specialized role-agents** (architect,
+Claude session into a coordinator that delegates work to **13 specialized role-agents** (architect,
 developer, tester, security, researcher, etc.), each backed by **57 skills** (methodology docs
 injected on demand). Its distinguishing claim over plain subagents: roles **accumulate knowledge
 across sessions** — strategies that work get reinforced into per-role "playbooks," and **trust
@@ -63,7 +63,7 @@ stand still.
 | | `session-start`, `session-end` | 🟢 Load-bearing — injection + GC + growth aggregation |
 | | `spawn-telemetry`, `write-proxy`, `taint-flag` | 🟡 Supporting — provenance (S-1/S-2 HIGH bugs FIXED + verified) |
 | | `skill-telemetry`, `teammate-lifecycle-reaper` | 🟡 Supporting — observability + cleanup |
-| Roles (12) | coordinator/architect/security (opus); developer/tester/researcher/writer/code-quality/authority/consolidator/signal (sonnet); retriever (haiku) | 🟢 Core. Dual-sourced in `agents/*.md` + `capabilities/*.json` |
+| Roles (13) | coordinator/architect/security (opus); developer/tester/researcher/writer/designer/code-quality/authority/consolidator/signal (sonnet); retriever (haiku) | 🟢 Core. Dual-sourced in `agents/*.md` + `capabilities/*.json` |
 | Skills (57) | dev-core (tdd, debug, verify, refactor, design…) | 🟢 On-mission |
 | | content/video cluster (video-script, video-edit, caption-format…) | 🔴 Off-mission for a dev team |
 | | team-review / team-review-periodic / team-implement | 🟡 Misclassified — belong in `commands/` |
@@ -71,7 +71,7 @@ stand still.
 | Scripts (12) | log-event, verify-artifact, pre-ship-gate, setup, team-status, compute-envelope-hmac, get-spawn-nonce, verify-* | 🟢/🟡 Mostly supporting |
 | | `layer2-effectiveness-audit.sh` (Layer-2 retired v5.8.0) | 🔴 Dead weight — DELETED in cleanup |
 | | `migrate-legacy-provenance.sh` (one-time migration) | 🟡 NOT dead — `tests/test-provenance.sh` TC10-12 depend on it; kept |
-| Instructions | runtime-charter.md + 12 role files (~3,800 lines) | 🟢 Core; ~593 lines duplicated boilerplate |
+| Instructions | runtime-charter.md + 13 role files (~3,800 lines) | 🟢 Core; ~593 lines duplicated boilerplate |
 | Dart app | `app/pm-client/` (1,118 lines, Flutter pulse UI) | 🔴 Non-plugin artifact in the package |
 | Schemas/Templates | `schemas/events/*.json`, `templates/` | 🟡 `spawn.json` diverges from emitter; `knowledge-index.md` template dead |
 | Tests | 6 bats, 14 .sh, 1 dart | 🟡 Real for `authority-enforce`; thin elsewhere |
@@ -110,7 +110,7 @@ not production-ready software as a whole.**
 
 | README claim | Reality |
 |--------------|---------|
-| "12 roles, 57 skills" | ✅ True (3 misclassified, several off-mission) |
+| "13 roles, 57 skills" | ✅ True (3 misclassified, several off-mission) |
 | "learn and improve over time" | 🟡 Scheduled LLM editing, not learning; real only if consolidator runs |
 | "strategies reinforced/retired" | 🟡 Aspirational — consolidator prose, no enforcement |
 | "trust levels gate permissions" | 🟢 *Reading* trust is enforced; 🟡 *updating* it is prose |

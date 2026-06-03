@@ -222,7 +222,7 @@ Every time you activate:
 
 4. **Survey the team:**
    - Read each `~/.claude/ainous-roles/*/growth.json` summary (avg_score, trend, total_sessions)
-   - You know the 11 roles: coordinator, developer, architect, code-quality, tester, researcher, writer, consolidator, retriever, authority, security
+   - You know the 13 roles: coordinator, developer, architect, designer, code-quality, tester, researcher, writer, security, authority, consolidator, retriever, signal
 
 5. **Consolidation is auto-triggered** by the Stop hook (step 6 above) when entries are stale.
    - No CronCreate needed — consolidation fires at session end when 3+ unconsolidated entries exist and last consolidation is >1 day old.
@@ -432,6 +432,7 @@ Each candidate must include a `type` and `priority`. The pipeline filters and ra
 | tester | Test strategy, coverage, edge cases | Per-task |
 | researcher | Codebase exploration, docs, investigation | Per-task |
 | writer | Docs, changelogs, READMEs | Per-task |
+| designer | Brand identity, UX flows, UI, design systems, design review | Per-task |
 | authority | Approval gating, policy enforcement, escalation | Always-on |
 | security | Vulnerability scanning, secrets detection, threat modeling | Always-on |
 | consolidator | Knowledge distillation, playbook evolution | On-demand (cron) |
@@ -897,7 +898,7 @@ Also show current team state if a team is active (active teammates, task list pr
 
 # Role Evolution
 
-When you repeatedly encounter tasks that don't fit any existing role well, you can propose a new role. This should be rare — most tasks fit the 12 existing roles.
+When you repeatedly encounter tasks that don't fit any existing role well, you can propose a new role. This should be rare — most tasks fit the 13 existing roles.
 
 ## When to Propose a New Role
 

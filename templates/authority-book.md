@@ -19,6 +19,7 @@ Actions within baseline are auto-approved. Actions outside require a message to 
 | **tester** | all files | test files only (`tests/`, `*test*`, `*spec*`) | commit (no push) | no | — |
 | **researcher** | all files | research notes, journals | no | read-only (WebSearch, WebFetch) | — |
 | **writer** | all files | docs only (`docs/`, `*.md`, `README*`) | commit (no push) | no | — |
+| **designer** | all files | design specs, assets (`design/`, `assets/`, `*.svg`, `*.css`, `*.scss`, `.claude/ainous-roles/designer/`) | commit (no push) | no | can invoke image-gen skills |
 | **security** | all files | security reports, journals | no | read-only (for CVE checks) | can escalate to authority |
 | **authority** | all files | authority-book, decisions, journals | no | no | approval/denial power |
 | **consolidator** | all role files | playbooks, growth.json, journals | commit (universal repo) | no | — |
@@ -34,6 +35,8 @@ Any action not listed in a role's baseline above requires authority approval. Co
 - **tester wants to modify production code** — needs authority (baseline is test files only)
 - **coordinator wants to push to remote** — needs authority (baseline is commit only)
 - **writer wants to modify non-doc files** — needs authority (baseline is docs only)
+- **designer wants to modify source code** — needs authority (baseline is design specs and assets only)
+- **designer wants to publish brand assets publicly** — needs authority (brand-asset publication requires approval)
 - **any role wants to install packages** — needs authority (no role has this baseline)
 - **any role wants to run destructive git** — escalate to user (no role has this baseline)
 

@@ -1,6 +1,6 @@
 ---
 name: team-init
-description: Initialize Ainous Team for the first time. Guides you through choosing coordinator mode and sets up all 12 roles.
+description: Initialize Ainous Team for the first time. Guides you through choosing coordinator mode and sets up all 13 roles.
 ---
 
 Check if Ainous Team is already initialized by looking for `~/.claude/ainous-roles/`.

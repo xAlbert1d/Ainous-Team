@@ -920,6 +920,7 @@ JUNIOR_BASELINES = {
     "consolidator": ["playbook", "growth.json", "journal", "memory", "cross-role"],
     "signal": ["signal", "journal", "team-knowledge", "artifacts"],  # v5.9.2 B-1
     "retriever": [],
+    "designer": ["design", "spec", "artifacts", "assets"],
     # C1: operator = human CLI operator. Broad project access; credential/system deny-list
     # applied earlier (OPERATOR_DENY_PATTERNS). NOT granted write to persistent-memory
     # surfaces directly — provenance validator gates those independently.
