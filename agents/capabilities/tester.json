@@ -7,7 +7,7 @@
   "task_types": ["testing", "test-writing", "test-strategy", "validation", "qa"],
   "input_artifacts": ["implementation", "architect-design.md"],
   "output_artifacts": ["tester-plan.md", "test-results", "learnings.jsonl"],
-  "keywords": ["test", "tests", "coverage", "qa", "validate", "verify", "spec", "assert", "test architecture", "strategy", "coverage plan", "accessibility", "frontend", "UI testing", "integration test", "end-to-end", "smoke test", "regression", "flaky"],
+  "keywords": ["test", "tests", "coverage", "qa", "validate", "verify", "spec", "assert", "test architecture", "strategy", "coverage plan", "accessibility", "frontend", "UI testing", "integration test", "end-to-end", "smoke test", "regression", "flaky", "diagnosing test failures", "failing assertions"],
   "anti_keywords": ["implement feature", "design architecture", "document"],
   "max_parallel": 2,
   "topology_phases": ["test"],
@@ -16,6 +16,7 @@
     {"skill": "test-strategy", "when": "keywords include test architecture, strategy, coverage plan"},
     {"skill": "a11y", "when": "keywords include accessibility, frontend, UI testing"},
     {"skill": "observability", "when": "keywords include integration test, end-to-end, smoke test"},
-    {"skill": "post-mortem", "when": "task is diagnosing regressions or flaky tests"}
+    {"skill": "post-mortem", "when": "task is diagnosing regressions or flaky tests"},
+    {"skill": "debug", "when": "diagnosing test failures, flaky tests, failing assertions"}
   ]
 }

@@ -7,7 +7,7 @@
   "task_types": ["implementation", "bugfix", "refactor", "feature"],
   "input_artifacts": ["architect-design.md", "researcher-findings.md", "security-findings.md"],
   "output_artifacts": ["implementation", "learnings.jsonl"],
-  "keywords": ["implement", "build", "fix", "code", "write", "create", "add", "change", "update", "refactor", "cleanup", "technical debt", "performance", "optimization", "slow", "latency", "migration", "schema", "database change", "CI/CD", "pipeline", "deploy", "docker", "frontend", "UI", "component", "CSS", "automation", "workflow", "script", "release", "ship", "publish", "API", "endpoint", "interface", "contract", "database", "model", "ORM", "logging", "monitoring", "tracing", "metrics", "accessibility", "a11y", "screen reader", "estimate", "planning"],
+  "keywords": ["implement", "build", "fix", "code", "write", "create", "add", "change", "update", "refactor", "cleanup", "technical debt", "performance", "optimization", "slow", "latency", "migration", "schema", "database change", "CI/CD", "pipeline", "deploy", "docker", "frontend", "UI", "component", "CSS", "automation", "workflow", "script", "release", "ship", "publish", "API", "endpoint", "interface", "contract", "database", "model", "ORM", "logging", "monitoring", "tracing", "metrics", "accessibility", "a11y", "screen reader", "estimate", "planning", "shared component", "API contract", "widely-used module", "blast radius"],
   "anti_keywords": ["design", "test strategy", "document only", "review only"],
   "max_parallel": 3,
   "topology_phases": ["implement"],
@@ -25,6 +25,7 @@
     {"skill": "observability", "when": "keywords include logging, monitoring, tracing, metrics"},
     {"skill": "a11y", "when": "keywords include accessibility, a11y, screen reader"},
     {"skill": "post-mortem", "when": "task follows an incident or production failure"},
-    {"skill": "estimate", "when": "keywords include estimate, scope, planning"}
+    {"skill": "estimate", "when": "keywords include estimate, scope, planning"},
+    {"skill": "impact-analysis", "when": "modifying a shared component, API contract, or widely-used module; blast radius unclear"}
   ]
 }

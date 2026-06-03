@@ -1,6 +1,7 @@
 ---
 name: image-craft-base
 description: "Shared craft conventions for the image-* gpt-image-2 skills — 5-section prompt template, style-anchor format, size/aspect table, and the transparency/text/tiling/safe-zone rules. Reference note for the image-* skills; not invoked directly."
+invocable: false
 ---
 
 # Image Craft Base

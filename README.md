@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.18.1.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.19.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -185,7 +185,11 @@ Topologies compose phases: `full-pipeline: [research, design, implement, test, r
 
 ### Skills Vault
 
-63 skills across 10 domains that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
+63 skills across 10 domains (62 invocable + 1 reference `image-craft-base`) that the coordinator assigns to roles at spawn time. Roles invoke them autonomously during execution.
+
+`agents/capabilities/index.json` carries a generated `skills` catalog — each entry records `description`, `triggers`, `owning_roles`, `default_for`, and `invocable`. The catalog is produced by `scripts/gen-skill-index.py` and never edited by hand; pre-ship Gate 7 enforces both freshness (committed catalog matches a fresh regen) and reachability (every on-disk skill is cataloged, every invocable skill has at least one owning role).
+
+Skill discovery uses a **floor-plus-semantic model**. The floor — each role's `default_skills` plus matching `conditional_skills` keyword triggers — is preserved unchanged and works on any model or Claude Code version. The coordinator may layer an additive semantic match on top, pulling any relevant invocable skill from the catalog regardless of which role owns it. Semantic selection is coordinator prose (NORMATIVE); the catalog invariants are Gate 7 (ENFORCED). This mirrors the Gate-6 / `manifest.sha256` self-consistency pattern introduced in v5.13.0.
 
 The three pipeline-orchestration commands (`/team-implement`, `/team-review`, `/team-review-periodic`) were commands all along and now live in `commands/`.
 
@@ -351,6 +355,38 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.19.0
+
+Adds a **generated skill catalog** and a **floor-plus-semantic skill-discovery model** that fixes the
+"coordinator can't find the suitable skill" problem — skills were previously single-role-owned and
+keyword-brittle, so a task that didn't match a role's keyword list could arrive without any relevant
+skill assigned.
+
+**Generated skill catalog.** `agents/capabilities/index.json` gains a machine-generated `skills` top-level
+key. Every skill entry carries `{description, triggers, owning_roles, default_for, invocable}`. The catalog
+is produced exclusively by `scripts/gen-skill-index.py` — it is never edited by hand. A new pre-ship
+**Gate 7** enforces two invariants: (a) **freshness** — the committed catalog must match a fresh regeneration
+(mirrors the Gate-6 / `manifest.sha256` / `gen-hook-manifest.sh` self-consistency pattern); (b)
+**reachability** — every skill present on disk appears in the catalog, and every `invocable: true` skill has
+at least one `owning_roles` entry. The sole `invocable: false` skill is `image-craft-base`, which is a shared
+base used by the image-* family rather than a directly callable skill.
+
+**Floor-plus-semantic selection.** The coordinator now selects skills as a union of two layers. The **floor**
+(a role's `default_skills` plus any `conditional_skills` whose keyword triggers match the task) is preserved
+unchanged — it requires no semantic reasoning and works correctly on weak models and older Claude Code
+versions. On top of the floor, the coordinator may apply an **additive semantic match** against the skill
+catalog: any `invocable: true` skill whose `description` or `triggers` are relevant to the task can be
+assigned to a role regardless of which role owns it in the catalog. This semantic selection is coordinator
+prose instruction (NORMATIVE), not code-enforced — only the catalog freshness and reachability invariants
+are mechanically enforced by Gate 7.
+
+**Conservative cross-wiring.** A few broadly-useful skills were wired to additional roles in the catalog
+(e.g., `debug` → developer + tester + code-quality; the `image-*` family and `codex-image-gen` → also
+writer) so the floor itself reaches relevant skills for common cross-domain tasks without requiring semantic
+override.
+
+Skill count remains **63** (62 `invocable: true` + 1 reference `image-craft-base`). All 7 gates green.
 
 ## What's new in v5.18.1
 

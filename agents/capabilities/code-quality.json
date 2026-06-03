@@ -7,10 +7,12 @@
   "task_types": ["code-review", "lint", "style-check", "maintainability", "pr-review"],
   "input_artifacts": ["implementation"],
   "output_artifacts": ["review-findings.md", "learnings.jsonl"],
-  "keywords": ["review", "check", "quality", "clean", "style", "lint", "maintainable", "readable"],
+  "keywords": ["review", "check", "quality", "clean", "style", "lint", "maintainable", "readable", "defect", "reported defect"],
   "anti_keywords": ["implement", "design", "document"],
   "max_parallel": 2,
   "topology_phases": ["review"],
   "default_skills": ["verify", "refactor", "code-review-ext", "confidence-calibration"],
-  "conditional_skills": []
+  "conditional_skills": [
+    {"skill": "debug", "when": "investigating a reported defect during review"}
+  ]
 }

@@ -7,7 +7,7 @@
   "task_types": ["documentation", "readme", "changelog", "technical-writing", "api-docs"],
   "input_artifacts": ["implementation", "researcher-findings.md"],
   "output_artifacts": ["documentation", "learnings.jsonl"],
-  "keywords": ["document", "docs", "readme", "changelog", "write docs", "explain", "describe", "runbook", "operations guide", "incident", "on-call", "narrative", "structured", "problem-solution", "multi-format", "blog", "brand", "style guide", "consistency", "infographic", "report", "visual summary", "public-facing", "release notes", "video", "screencast", "tutorial", "video editing", "captions", "subtitles"],
+  "keywords": ["document", "docs", "readme", "changelog", "write docs", "explain", "describe", "runbook", "operations guide", "incident", "on-call", "narrative", "structured", "problem-solution", "multi-format", "blog", "brand", "style guide", "consistency", "infographic", "report", "visual summary", "public-facing", "release notes", "video", "screencast", "tutorial", "video editing", "captions", "subtitles", "OG image", "open graph", "article visual", "hero image", "social card", "illustration", "thumbnail", "process diagram", "decision flow"],
   "anti_keywords": ["implement", "test", "design architecture"],
   "max_parallel": 2,
   "topology_phases": ["docs"],
@@ -22,6 +22,12 @@
     {"skill": "runbook-creation", "when": "keywords include runbook, operations guide, incident, on-call"},
     {"skill": "video-script", "when": "keywords include video, screencast, tutorial, demo script"},
     {"skill": "video-edit", "when": "keywords include video editing, scene cuts, pacing, edit list"},
-    {"skill": "caption-format", "when": "keywords include captions, subtitles, SRT, VTT"}
+    {"skill": "caption-format", "when": "keywords include captions, subtitles, SRT, VTT"},
+    {"skill": "image-hero", "when": "keywords include blog hero, article hero image, OG image"},
+    {"skill": "image-social-card", "when": "keywords include social card, open graph, OG image, article visual"},
+    {"skill": "image-illustration", "when": "keywords include article illustration, blog illustration, editorial illustration"},
+    {"skill": "image-thumbnail", "when": "keywords include article thumbnail, blog thumbnail, preview image"},
+    {"skill": "codex-image-gen", "when": "keywords include generate image, blog visual, article visual, OG image, hero image, social card, thumbnail"},
+    {"skill": "flowchart", "when": "keywords include process diagram, decision flow in docs, decision flow"}
   ]
 }

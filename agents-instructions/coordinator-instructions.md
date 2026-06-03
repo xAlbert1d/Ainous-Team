@@ -284,7 +284,7 @@ When the user gives you a task, follow this 7-step pipeline. The key principle: 
 ## Step 3: Generate Candidates (LLM — the ONLY creative step)
 Given the context snapshot, memory, and user request, generate ranked action candidates. Each candidate is a typed object (see Typed Action Candidates below). Generate up to 5 candidates — they will be trimmed to 1-3 after filtering.
 
-**Agent Cards**: Before generating candidates, check `agents/capabilities/index.json` and load matching role capabilities from `agents/capabilities/<role>.json`. Match task keywords against `role.keywords` and exclude roles whose `anti_keywords` match. Cards are authoritative for routing; keywords must cover every `when` trigger in `conditional_skills` to preserve mechanical routing — a keyword lookup alone must be sufficient to identify the right role AND determine which conditional skills apply. This reduces Step 3 from LLM-creative to primarily mechanical — use LLM judgment only for ambiguous matches.
+**Agent Cards**: Before generating candidates, check `agents/capabilities/index.json` and load matching role capabilities from `agents/capabilities/<role>.json`. Match task keywords against `role.keywords` and exclude roles whose `anti_keywords` match. Cards are authoritative for routing; keywords must cover every `when` trigger in `conditional_skills` to preserve mechanical routing — a keyword lookup alone must be sufficient to identify the right role AND determine which conditional skills apply. This reduces Step 3 from LLM-creative to primarily mechanical — use LLM judgment only for ambiguous matches. Also load the `skills` block from `index.json` — it is the authoritative catalog of all reachable skills, what each does (`description`), and which roles own it (`owning_roles`); use it as the ground truth for what skills are available and what their capabilities are.
 
 **Semantic override (additive — keyword arrays are never weakened):** The coordinator MAY override a
 keyword match using the role `description` field and semantic judgment when keywords are ambiguous
@@ -296,6 +296,13 @@ domain ownership). When a semantic override occurs, record the reason in the rou
 Do NOT remove keyword arrays or narrow them as a result of overrides — the keyword mechanism is the
 primary path for weaker models that cannot reliably do semantic reasoning. Overrides are an
 escape hatch, not a replacement.
+
+**Semantic skill selection (additive — conditional_skills keyword path is the floor):**
+The floor skill set for a spawned role is: `default_skills` UNION any `conditional_skills` whose `when` phrase matches the task by keyword lookup. This floor must remain sufficient on its own — never narrow it. On top of the floor, additively pull any skill from the `index.json` `skills` catalog whose `description` or `triggers` matches the task by semantic meaning, regardless of which role normally owns that skill (`owning_roles`); assign the pulled skill to the spawned role for this task. Skip any skill with `invocable: false` (e.g. `image-craft-base` — it is a reference document, not an invocable capability). Record each catalog-semantic pull in the routing-decision event:
+```jsonl
+{"type":"routing-decision", ..., "skill_semantic_pull": "<skill-name>", "pull_reason": "<why this skill matched the task semantically>", ...}
+```
+Degradation contract: if `index.json` is missing, unparseable, or has no `skills` block, silently fall back to the floor — do not fail routing.
 
 This is where you exercise judgment: which topology fits, which roles are needed, whether to answer directly, whether to ask for clarification. All other steps enforce mechanical constraints on your candidates.
 
@@ -333,7 +340,7 @@ For tasks where the team has been working on the same problem for 3+ sessions wi
 
 ## Step 6: Assemble Contracts (deterministic)
 For each selected candidate of type DELEGATE_ROLE:
-- Build the execution contract: required outputs, completion conditions, scope, assigned skills (from Skill Assignment table)
+- Build the execution contract: required outputs, completion conditions, scope, assigned skills (from Skill Assignment table; assigned skills now include both the floor — `default_skills` + matching `conditional_skills` — and any catalog-semantic pulls added in Step 3 via the semantic skill selection rule above)
 - **Select model tier** based on task complexity:
 
 | Tier | Model | Use When | Examples |

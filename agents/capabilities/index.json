@@ -1,6 +1,978 @@
 {
-  "version": "1.0",
+  "version": "1.2",
   "description": "Agent capability registry — coordinator uses this for mechanical routing",
-  "roles": ["coordinator", "developer", "architect", "tester", "researcher", "writer", "security", "code-quality", "authority", "consolidator", "retriever", "signal", "designer"],
-  "routing_hint": "Match task keywords against role keywords; break ties using topology_phases; use anti_keywords to exclude; prefer lower max_parallel roles for sequential tasks"
+  "roles": [
+    "coordinator",
+    "developer",
+    "architect",
+    "tester",
+    "researcher",
+    "writer",
+    "security",
+    "code-quality",
+    "authority",
+    "consolidator",
+    "retriever",
+    "signal",
+    "designer"
+  ],
+  "routing_hint": "Match task keywords against role keywords; break ties using topology_phases; use anti_keywords to exclude; prefer lower max_parallel roles for sequential tasks",
+  "skills_generated_by": "scripts/gen-skill-index.py",
+  "skill_routing_hint": "Skill set floor = default_skills + any conditional_skills whose `when` matches the task (keyword lookup is sufficient alone). Additive semantic pull: also search catalog description and triggers for any invocable skill (invocable != false) that matches the task by meaning, regardless of owner role, and assign it to the spawned role. Never narrow the floor. Never select invocable:false skills (e.g. image-craft-base).",
+  "skills": {
+    "a11y": {
+      "description": "Accessibility compliance — WCAG, screen readers, keyboard navigation, color contrast, semantic HTML, ARIA. Use when building or reviewing UI, ensuring legal compliance, or improving usability for all users.",
+      "triggers": [
+        "accessibility",
+        "a11y",
+        "WCAG",
+        "screen reader",
+        "contrast",
+        "frontend",
+        "UI testing"
+      ],
+      "owning_roles": [
+        "designer",
+        "developer",
+        "tester"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "api-design": {
+      "description": "API design principles and contracts. Use when designing, reviewing, or modifying HTTP/REST APIs. Invoke when defining endpoints, error formats, pagination, or versioning strategy.",
+      "triggers": [
+        "API",
+        "endpoint",
+        "interface",
+        "contract"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer"
+      ],
+      "default_for": [
+        "architect"
+      ],
+      "invocable": true
+    },
+    "auto-decide": {
+      "description": "Decision classification framework — separates mechanical decisions (auto-resolve) from taste decisions (need human input). Use when triaging multiple decisions, planning workflows, or reducing decision fatigue.",
+      "triggers": [
+        "task involves many dependent decisions with clear criteria"
+      ],
+      "owning_roles": [
+        "coordinator"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "caption-format": {
+      "description": "Formats captions and subtitles for readability, timing, and accessibility. Produces SRT/VTT format output. Use when publishing videos, ensuring accessibility compliance, or adding multilingual subtitles.",
+      "triggers": [
+        "captions",
+        "subtitles",
+        "SRT",
+        "VTT"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "code-review-ext": {
+      "description": "Comprehensive multi-pass code review covering architecture, logic, performance, security, and conventions. Use for pull request reviews, pre-merge checks, and code audits. Extends the verify skill with proactive quality analysis.",
+      "triggers": [],
+      "owning_roles": [
+        "code-quality"
+      ],
+      "default_for": [
+        "code-quality"
+      ],
+      "invocable": true
+    },
+    "codex-image-gen": {
+      "description": "Generate production raster images by driving the OpenAI Codex CLI (gpt-image-2). Use when you need real image assets — hero art, textures, icons, thumbnails, OG/social cards — created and saved into a project without your own image-API key. Triggers: \"generate an image\", \"make a hero/background/icon\", \"I have Codex, use it for images\".",
+      "triggers": [
+        "generate image",
+        "asset",
+        "illustration",
+        "icon",
+        "hero",
+        "social card",
+        "thumbnail",
+        "background",
+        "texture",
+        "blog visual",
+        "article visual",
+        "OG image",
+        "hero image"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "competitive-intel": {
+      "description": "Structured comparison analysis of tools, frameworks, or approaches. Use for technology selection, architecture decisions, tool migration evaluation, or market analysis.",
+      "triggers": [
+        "tool evaluation",
+        "comparison",
+        "alternatives",
+        "market"
+      ],
+      "owning_roles": [
+        "researcher",
+        "signal"
+      ],
+      "default_for": [
+        "signal"
+      ],
+      "invocable": true
+    },
+    "compliance-check": {
+      "description": "Regulatory compliance review for code and data systems. Use when code handles PII, PHI, payment data, or operates in regulated environments (GDPR, HIPAA, SOC 2, PCI-DSS). Invoke before shipping features that touch user data collection, retention, or deletion.",
+      "triggers": [],
+      "owning_roles": [
+        "security"
+      ],
+      "default_for": [
+        "security"
+      ],
+      "invocable": true
+    },
+    "confidence-calibration": {
+      "description": "Structural confidence labeling for role outputs. Use when emitting findings, assessments, or recommendations that downstream roles or the coordinator will act on. Invoke before any completed event where genuine uncertainty exists.",
+      "triggers": [],
+      "owning_roles": [
+        "architect",
+        "authority",
+        "code-quality",
+        "consolidator",
+        "designer",
+        "developer",
+        "researcher",
+        "security",
+        "signal",
+        "tester",
+        "writer"
+      ],
+      "default_for": [
+        "architect",
+        "authority",
+        "code-quality",
+        "consolidator",
+        "designer",
+        "developer",
+        "researcher",
+        "security",
+        "signal",
+        "tester",
+        "writer"
+      ],
+      "invocable": true
+    },
+    "content-repurpose": {
+      "description": "Converts long-form content into multiple formats while preserving core message. Use when turning design docs into READMEs, research into summaries, or internal docs into external-facing content.",
+      "triggers": [
+        "multi-format",
+        "blog",
+        "presentation"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "contract-testing": {
+      "description": "Service contract verification. Use when testing interactions between services — HTTP APIs, message queues, event streams. Invoke when integration tests are too slow or brittle, or when you need to verify that producer and consumer agree on the data contract without deploying both.",
+      "triggers": [],
+      "owning_roles": [
+        "tester"
+      ],
+      "default_for": [
+        "tester"
+      ],
+      "invocable": true
+    },
+    "copywriting": {
+      "description": "Generates clear, impactful text with hooks and structured flow. Use when writing READMEs, release notes, product descriptions, project descriptions, or blog posts.",
+      "triggers": [
+        "copy",
+        "microcopy",
+        "cta",
+        "label",
+        "voice",
+        "tone",
+        "README",
+        "release notes",
+        "public-facing"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "data-model": {
+      "description": "Schema design, normalization, denormalization tradeoffs, indexing strategy, and data lifecycle. Use when designing databases, planning migrations, or evaluating data architecture decisions.",
+      "triggers": [
+        "database design",
+        "schema",
+        "entities",
+        "database",
+        "model",
+        "ORM"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "debug": {
+      "description": "Systematic debugging methodology. Use when fixing bugs, investigating test failures, or diagnosing unexpected behavior. Invoke before proposing any fix.",
+      "triggers": [
+        "investigating a reported defect during review",
+        "diagnosing test failures",
+        "flaky tests",
+        "failing assertions"
+      ],
+      "owning_roles": [
+        "code-quality",
+        "developer",
+        "tester"
+      ],
+      "default_for": [
+        "developer"
+      ],
+      "invocable": true
+    },
+    "deep-research": {
+      "description": "Synthesizes insights from multiple sources — filters noise, identifies patterns, produces actionable summaries. Use for technology evaluation, paper analysis, codebase archaeology, or market research.",
+      "triggers": [
+        "scan mode is deep or targeted topic requires depth"
+      ],
+      "owning_roles": [
+        "researcher",
+        "signal"
+      ],
+      "default_for": [
+        "researcher"
+      ],
+      "invocable": true
+    },
+    "design": {
+      "description": "Architecture and design principles. Use when designing features, planning implementations, or producing design artifacts for handoff. Invoke when the task requires structural decisions.",
+      "triggers": [],
+      "owning_roles": [
+        "architect"
+      ],
+      "default_for": [
+        "architect"
+      ],
+      "invocable": true
+    },
+    "devops": {
+      "description": "Guides deployment, CI/CD, infrastructure, and automation tasks with concrete commands and configuration. Use for CI/CD setup, deployment troubleshooting, infrastructure changes, and release management.",
+      "triggers": [
+        "CI/CD",
+        "pipeline",
+        "deploy",
+        "docker"
+      ],
+      "owning_roles": [
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "diagram": {
+      "description": "Converts concepts, architectures, and workflows into renderable diagrams using Mermaid syntax. Use when creating architecture docs, design handoffs, README visuals, or system overviews.",
+      "triggers": [
+        "diagram",
+        "visual",
+        "architecture doc",
+        "flow",
+        "user journey",
+        "wireframe",
+        "sitemap"
+      ],
+      "owning_roles": [
+        "architect",
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "docs": {
+      "description": "Technical documentation principles. Use when writing READMEs, guides, API docs, inline comments, or any prose that another human must act on. Invoke before drafting any documentation artifact.",
+      "triggers": [],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [
+        "writer"
+      ],
+      "invocable": true
+    },
+    "estimate": {
+      "description": "Effort estimation, complexity assessment, and uncertainty communication. Use when scoping work, planning timelines, or communicating delivery expectations. Covers point estimates, ranges, and risk factors.",
+      "triggers": [
+        "estimate",
+        "scope",
+        "planning",
+        "scoping",
+        "sprint"
+      ],
+      "owning_roles": [
+        "architect",
+        "coordinator",
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "flowchart": {
+      "description": "Generates decision trees and process flowcharts from textual descriptions using Mermaid syntax. Use for troubleshooting guides, architecture decisions, deployment processes, and user flows.",
+      "triggers": [
+        "decision tree",
+        "flow",
+        "process",
+        "process diagram",
+        "decision flow in docs",
+        "decision flow"
+      ],
+      "owning_roles": [
+        "architect",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "ideate": {
+      "description": "Structured product ideation and creative exploration. Use when exploring what to build, evaluating opportunities, brainstorming features, or validating demand before committing to implementation.",
+      "triggers": [
+        "explore",
+        "brainstorm",
+        "options",
+        "alternatives"
+      ],
+      "owning_roles": [
+        "architect",
+        "designer"
+      ],
+      "default_for": [
+        "designer"
+      ],
+      "invocable": true
+    },
+    "image-background": {
+      "description": "Author a gpt-image-2 full-bleed abstract/ambient background prompt and hand off to codex-image-gen. Triggers: background art, abstract backdrop, ambient gradient art.",
+      "triggers": [
+        "background image",
+        "background pattern",
+        "scene"
+      ],
+      "owning_roles": [
+        "designer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "image-craft-base": {
+      "description": "Shared craft conventions for the image-* gpt-image-2 skills — 5-section prompt template, style-anchor format, size/aspect table, and the transparency/text/tiling/safe-zone rules. Reference note for the image-* skills; not invoked directly.",
+      "triggers": [],
+      "owning_roles": [],
+      "default_for": [],
+      "invocable": false
+    },
+    "image-hero": {
+      "description": "Author a gpt-image-2 hero/banner prompt and hand off to codex-image-gen. Triggers: make a hero, banner image, landing page background art.",
+      "triggers": [
+        "hero",
+        "hero image",
+        "landing page hero",
+        "blog hero",
+        "article hero image",
+        "OG image"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "image-icon": {
+      "description": "Author a gpt-image-2 prompt for an app icon, favicon, glyph, or logo/wordmark and hand off to codex-image-gen. Triggers: make an icon, app icon/favicon, logo/glyph, transparent icon.",
+      "triggers": [
+        "icon",
+        "app icon",
+        "favicon"
+      ],
+      "owning_roles": [
+        "designer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "image-illustration": {
+      "description": "Author a gpt-image-2 spot-illustration or CONSISTENT-series prompt and hand off to codex-image-gen. Triggers: spot illustration, illustration set, matching series, consistent illustrations.",
+      "triggers": [
+        "illustration",
+        "spot illustration",
+        "editorial",
+        "article illustration",
+        "blog illustration",
+        "editorial illustration"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "image-social-card": {
+      "description": "Author a gpt-image-2 OG/social card or 9:16 story prompt with verbatim text and hand off to codex-image-gen. Triggers: OG image, social card, Open Graph, share card, story graphic.",
+      "triggers": [
+        "social card",
+        "og image",
+        "open graph",
+        "twitter card",
+        "OG image",
+        "article visual"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "image-texture": {
+      "description": "Author a gpt-image-2 SEAMLESS tileable texture prompt and hand off to codex-image-gen. Triggers: tileable texture, seamless pattern, repeating background pattern.",
+      "triggers": [
+        "texture",
+        "surface",
+        "material",
+        "pattern tile"
+      ],
+      "owning_roles": [
+        "designer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "image-thumbnail": {
+      "description": "Author a gpt-image-2 thumbnail prompt and hand off to codex-image-gen. Triggers: make a thumbnail, video thumbnail, card image, list thumbnail.",
+      "triggers": [
+        "thumbnail",
+        "video thumbnail",
+        "preview image",
+        "article thumbnail",
+        "blog thumbnail"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "impact-analysis": {
+      "description": "Change impact assessment. Use before modifying any shared system, API contract, or widely-used component. Invoke when the blast radius of a change is unclear. Skip for isolated, single-file changes with no consumers.",
+      "triggers": [
+        "change impact",
+        "dependency",
+        "breaking change",
+        "modifying a shared component",
+        "API contract",
+        "or widely-used module",
+        "blast radius unclear"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "infographic": {
+      "description": "Turns data and processes into structured visual summaries using markdown tables, metrics, and hierarchy. Use for project reports, dashboards, status summaries, and team presentations.",
+      "triggers": [
+        "data visualization",
+        "stat graphic",
+        "visual summary asset",
+        "report",
+        "visual summary",
+        "infographic"
+      ],
+      "owning_roles": [
+        "designer",
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "knowledge-structure": {
+      "description": "Organizes unstructured information into clear frameworks with hierarchy and cross-references. Use when structuring team-knowledge, organizing research output, or designing documentation architecture.",
+      "triggers": [
+        "processing team-knowledge.md or cross-role insights",
+        "organize findings",
+        "summarize",
+        "structure"
+      ],
+      "owning_roles": [
+        "consolidator",
+        "researcher"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "migrate": {
+      "description": "Migration and upgrade methodology. Use when planning schema changes, data migrations, API version upgrades, or any operation that transforms existing production state. Invoke before executing any migration.",
+      "triggers": [
+        "migration",
+        "schema",
+        "data model evolution",
+        "database change"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "negotiate": {
+      "description": "Managing conflicting requirements, stakeholder alignment, technical vs business tradeoffs, and saying no constructively. Use when facing competing demands, scope conflicts, or resource contention.",
+      "triggers": [
+        "conflicting requirements",
+        "tradeoff decision",
+        "stakeholder alignment"
+      ],
+      "owning_roles": [
+        "architect",
+        "coordinator"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "observability": {
+      "description": "Logging, metrics, tracing, and alerting strategy. Use when designing monitoring for a service, investigating production behavior, or setting up alerting. Covers the three pillars and runbook design.",
+      "triggers": [
+        "monitoring",
+        "alerting",
+        "SLO",
+        "logging",
+        "tracing",
+        "metrics",
+        "integration test",
+        "end-to-end",
+        "smoke test"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer",
+        "tester"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "onboard": {
+      "description": "How to ramp up on a new codebase, project, or team. Systematic codebase archaeology, finding entry points, understanding conventions. Use when joining a project, starting a new engagement, or helping someone get oriented.",
+      "triggers": [
+        "new codebase",
+        "unfamiliar",
+        "first time",
+        "getting started"
+      ],
+      "owning_roles": [
+        "researcher"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "perf": {
+      "description": "Performance optimization principles. Use when investigating slow code, optimizing hot paths, adding caching, or evaluating performance tradeoffs. Invoke before making any change motivated by speed.",
+      "triggers": [
+        "performance",
+        "latency",
+        "throughput",
+        "scaling",
+        "optimization",
+        "slow"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "post-mortem": {
+      "description": "Structured incident analysis after production failures. Use after outages, data loss, security breaches, or any event that impacted users. Blameless methodology with timeline, root cause, and prevention.",
+      "triggers": [
+        "incident",
+        "post-mortem",
+        "root cause",
+        "task follows an incident or production failure",
+        "task is diagnosing regressions or flaky tests"
+      ],
+      "owning_roles": [
+        "coordinator",
+        "developer",
+        "tester"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "premise-check": {
+      "description": "Strategic premise validation before committing to a solution. Use before any significant implementation, product decision, architecture change, or resource allocation. Challenges whether the problem is correctly framed.",
+      "triggers": [
+        "strategic review",
+        "assumption check"
+      ],
+      "owning_roles": [
+        "architect",
+        "coordinator"
+      ],
+      "default_for": [
+        "architect"
+      ],
+      "invocable": true
+    },
+    "present": {
+      "description": "Technical presentation to any audience — storytelling with data, slide structure, demo scripting, adapting depth to audience. Use when preparing talks, demos, stakeholder updates, or any presentation of technical work.",
+      "triggers": [
+        "presentation",
+        "demo",
+        "stakeholder",
+        "pitch"
+      ],
+      "owning_roles": [
+        "architect",
+        "designer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "prioritize": {
+      "description": "Frameworks for ranking competing opportunities — RICE, ICE, MoSCoW, and weighted scoring. Use when triaging backlogs, planning roadmaps, or deciding what to work on next.",
+      "triggers": [
+        "backlog",
+        "prioritize",
+        "triage"
+      ],
+      "owning_roles": [
+        "coordinator"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "refactor": {
+      "description": "Refactoring methodology and discipline. Use when improving code structure, reducing complexity, or cleaning up before adding features to tangled code.",
+      "triggers": [
+        "task type is cleanup or technical debt"
+      ],
+      "owning_roles": [
+        "code-quality",
+        "developer"
+      ],
+      "default_for": [
+        "code-quality"
+      ],
+      "invocable": true
+    },
+    "release-gate": {
+      "description": "Release engineering discipline — scope drift detection, coverage audit, test bootstrap, and documentation sync. Use before shipping any release, creating a PR, or deploying to production.",
+      "triggers": [
+        "release",
+        "ship",
+        "deploy",
+        "publish"
+      ],
+      "owning_roles": [
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "retro-metrics": {
+      "description": "Quantified retrospective with shipping metrics, health trends, and growth tracking. Use for periodic team reviews, sprint retrospectives, or any reflection that should be data-driven rather than feelings-driven.",
+      "triggers": [
+        "retrospective",
+        "team review",
+        "retro"
+      ],
+      "owning_roles": [
+        "coordinator"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "review-response": {
+      "description": "How to evaluate and respond to code review feedback. Use when receiving review comments, PR feedback, or quality findings from another role. Invoke before implementing any review suggestion.",
+      "triggers": [],
+      "owning_roles": [
+        "developer"
+      ],
+      "default_for": [
+        "developer"
+      ],
+      "invocable": true
+    },
+    "runbook-creation": {
+      "description": "Operational runbook authoring. Use when creating or updating incident response procedures, deployment steps, rollback guides, or on-call playbooks. Invoke when a process must be reproducible by someone who wasn't present when it was designed.",
+      "triggers": [
+        "runbook",
+        "operations guide",
+        "incident",
+        "on-call"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "scqa": {
+      "description": "Structures content using the Situation→Complication→Question→Answer framework for clear logical narratives. Use when writing architecture proposals, RFCs, incident reports, or design documents.",
+      "triggers": [
+        "narrative",
+        "structured",
+        "problem-solution"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "security-scan": {
+      "description": "Security scanning methodology. Use when reviewing code for vulnerabilities, auditing dependencies, or checking for secrets and misconfigurations before release.",
+      "triggers": [],
+      "owning_roles": [
+        "security"
+      ],
+      "default_for": [
+        "security"
+      ],
+      "invocable": true
+    },
+    "skill-creator": {
+      "description": "Meta-skill for creating new AI skills in .md format. Use when designing, structuring, or improving skills for the vault.",
+      "triggers": [
+        "cross-role analysis finds a new reusable technique to propose"
+      ],
+      "owning_roles": [
+        "consolidator"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "source-validate": {
+      "description": "Validates credibility and reliability of information sources. Use when processing external signals, evaluating technology claims, or assessing research findings.",
+      "triggers": [],
+      "owning_roles": [
+        "researcher",
+        "signal"
+      ],
+      "default_for": [
+        "researcher",
+        "signal"
+      ],
+      "invocable": true
+    },
+    "strategy-evolution": {
+      "description": "Playbook evolution methodology for the consolidator role. Use when adding, modifying, or retiring playbook strategies. Invoke during consolidation cycles.",
+      "triggers": [],
+      "owning_roles": [
+        "consolidator"
+      ],
+      "default_for": [
+        "consolidator"
+      ],
+      "invocable": true
+    },
+    "structural-isolation": {
+      "description": "Multi-agent isolation methodology. Use when spawning parallel reviewers, running map-reduce analysis, or performing perspective forking — any task where independent outputs are required before aggregation.",
+      "triggers": [],
+      "owning_roles": [
+        "tester"
+      ],
+      "default_for": [
+        "tester"
+      ],
+      "invocable": true
+    },
+    "summarize": {
+      "description": "Condenses complex content into actionable summaries. Use for journal compaction, compiled truth synthesis, research distillation, and any long-form-to-short-form transformation.",
+      "triggers": [],
+      "owning_roles": [
+        "consolidator",
+        "writer"
+      ],
+      "default_for": [
+        "consolidator",
+        "writer"
+      ],
+      "invocable": true
+    },
+    "tdd": {
+      "description": "Test-driven development principles. Use when implementing features or fixing bugs where tests exist or should exist. Invoke when you're about to write code that should be tested.",
+      "triggers": [],
+      "owning_roles": [
+        "developer",
+        "tester"
+      ],
+      "default_for": [
+        "developer",
+        "tester"
+      ],
+      "invocable": true
+    },
+    "test-strategy": {
+      "description": "Deciding which types of tests to use where — unit, integration, e2e, load, contract, chaos. Broader than TDD (which is a write-test-first methodology). Use when designing a testing approach for a project or feature.",
+      "triggers": [
+        "test architecture",
+        "testability",
+        "strategy",
+        "coverage plan"
+      ],
+      "owning_roles": [
+        "architect",
+        "tester"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "threat-model": {
+      "description": "Structured threat modeling using STRIDE framework and trust boundary mapping. Use when designing security-sensitive features, reviewing architecture for threats, or preparing for security audits. Extends security-scan with architecture-level thinking.",
+      "triggers": [
+        "security architecture",
+        "auth",
+        "trust boundary"
+      ],
+      "owning_roles": [
+        "architect",
+        "security"
+      ],
+      "default_for": [
+        "security"
+      ],
+      "invocable": true
+    },
+    "tone-enforce": {
+      "description": "Ensures consistent voice and style across outputs — code comments, docs, commit messages, error messages. Use when reviewing multi-author docs or maintaining project voice.",
+      "triggers": [
+        "brand",
+        "style guide",
+        "consistency"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "ui-layout": {
+      "description": "Advises on interface layouts for clarity, spacing, hierarchy, and usability. Provides concrete CSS/HTML suggestions. Use for frontend development, design reviews, and component layouts.",
+      "triggers": [
+        "frontend",
+        "UI",
+        "component hierarchy",
+        "component",
+        "CSS"
+      ],
+      "owning_roles": [
+        "architect",
+        "designer",
+        "developer"
+      ],
+      "default_for": [
+        "designer"
+      ],
+      "invocable": true
+    },
+    "verify": {
+      "description": "Evidence-before-claims discipline. Use before claiming any work is complete, any test passes, any bug is fixed. Invoke before writing \"done\", \"fixed\", or \"passes\" in any output.",
+      "triggers": [],
+      "owning_roles": [
+        "architect",
+        "code-quality",
+        "designer",
+        "developer",
+        "researcher",
+        "security",
+        "signal",
+        "tester",
+        "writer"
+      ],
+      "default_for": [
+        "architect",
+        "code-quality",
+        "designer",
+        "developer",
+        "researcher",
+        "security",
+        "signal",
+        "tester",
+        "writer"
+      ],
+      "invocable": true
+    },
+    "video-edit": {
+      "description": "Plans editing structure, scene cuts, transitions, and pacing for video content. Produces editing decision lists that an editor can follow. Use when planning tutorial editing, demo videos, or presentation assembly.",
+      "triggers": [
+        "video editing",
+        "scene cuts",
+        "pacing",
+        "edit list"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "video-script": {
+      "description": "Structures scripts for demo videos, tutorials, and presentations with hooks, pacing, and calls-to-action. Use when planning video content, conference talks, or recorded demos.",
+      "triggers": [
+        "video",
+        "screencast",
+        "tutorial",
+        "demo script"
+      ],
+      "owning_roles": [
+        "writer"
+      ],
+      "default_for": [],
+      "invocable": true
+    },
+    "workflow-auto": {
+      "description": "Task decomposition and workflow automation. Use when breaking complex goals into step-by-step executable workflows, mapping actions to tools, and optimizing execution order.",
+      "triggers": [
+        "workflow design",
+        "automation",
+        "workflow",
+        "script"
+      ],
+      "owning_roles": [
+        "architect",
+        "developer"
+      ],
+      "default_for": [],
+      "invocable": true
+    }
+  }
 }

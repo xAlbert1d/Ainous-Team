@@ -7,7 +7,7 @@
   "task_types": ["design", "ux", "ui", "brand", "design-review", "design-system", "visual-asset"],
   "input_artifacts": ["researcher-findings.md", "architect-design.md", "task-description"],
   "output_artifacts": ["designer-spec.md", "learnings.jsonl"],
-  "keywords": ["design", "ux", "ui", "brand", "visual", "layout", "typography", "color", "spacing", "component", "flow", "onboarding", "wireframe", "mockup", "prototype", "accessibility", "a11y", "responsive", "mobile", "desktop", "icon", "illustration", "hero", "landing page", "style guide", "design system", "token", "palette", "font", "grid", "interaction", "animation", "transition", "dark mode", "light mode", "theme", "logo", "identity", "look and feel", "user journey", "persona", "friction", "conversion", "cta", "button", "form", "modal", "card", "nav", "sidebar", "dashboard", "empty state", "loading state", "error state", "social card", "thumbnail", "banner", "background", "texture"],
+  "keywords": ["design", "ux", "ui", "brand", "visual", "layout", "typography", "color", "spacing", "component", "flow", "onboarding", "wireframe", "mockup", "prototype", "accessibility", "a11y", "responsive", "mobile", "desktop", "icon", "illustration", "hero", "landing page", "style guide", "design system", "token", "palette", "font", "grid", "interaction", "animation", "transition", "dark mode", "light mode", "theme", "logo", "identity", "look and feel", "user journey", "persona", "friction", "conversion", "cta", "button", "form", "modal", "card", "nav", "sidebar", "dashboard", "empty state", "loading state", "error state", "social card", "thumbnail", "banner", "background", "texture", "data visualization", "stat graphic", "visual summary asset"],
   "anti_keywords": ["implement", "fix bug", "write tests", "deploy", "database schema"],
   "max_parallel": 2,
   "topology_phases": ["design"],
@@ -24,6 +24,7 @@
     {"skill": "image-social-card", "when": "keywords include social card, og image, open graph, twitter card"},
     {"skill": "image-thumbnail", "when": "keywords include thumbnail, video thumbnail, preview image"},
     {"skill": "image-background", "when": "keywords include background image, background pattern, scene"},
-    {"skill": "image-texture", "when": "keywords include texture, surface, material, pattern tile"}
+    {"skill": "image-texture", "when": "keywords include texture, surface, material, pattern tile"},
+    {"skill": "infographic", "when": "keywords include data visualization, stat graphic, visual summary asset"}
   ]
 }

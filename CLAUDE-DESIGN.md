@@ -378,6 +378,36 @@ Conceptual memory lifecycle. Enforcement relies on the consolidator's Phase 4b p
 - Pipeline-orchestration commands (team-implement, team-review, team-review-periodic) moved to `commands/` — they are user-facing commands, not role-injected skills
 - The skill mapping is evolvable by the consolidator based on retro data
 
+### Skill Catalog — Generated, Never Hand-Edited
+
+`agents/capabilities/index.json` carries a top-level `skills` key that is the canonical catalog of all
+skills. Each entry is `{description, triggers, owning_roles, default_for, invocable}`. The catalog is
+produced exclusively by `scripts/gen-skill-index.py` and is committed as a build artifact — never
+maintained by hand.
+
+This follows the same honesty model as the hook-manifest / Gate-6 pattern from v5.13.0: a script that
+generates a committed artifact that is then verified by a pre-ship gate, making a class of drift silently
+impossible. Gate 7 (`scripts/pre-ship-gate.sh`) enforces two invariants before any release:
+
+- **Freshness**: the committed catalog must be byte-identical to a fresh run of `gen-skill-index.py`.
+  Stale or hand-edited entries fail the gate.
+- **Reachability**: every `skills/*/SKILL.md` on disk appears in the catalog, and every `invocable: true`
+  entry has at least one `owning_roles` member. No skill can silently become unreachable through a routing
+  change.
+
+The sole `invocable: false` skill is `image-craft-base` — it is a shared base template used by the
+image-* family, not a directly callable skill, and is exempt from the owning-role requirement.
+
+**What Gate 7 enforces vs. what remains normative.** Gate 7 guarantees catalog correctness and
+completeness. It does NOT enforce how the coordinator uses the catalog — skill *selection* itself is
+coordinator prose instruction (NORMATIVE): the coordinator is instructed to compute a UNION of the floor
+(each role's `default_skills` plus matching `conditional_skills` keyword triggers — unchanged, no semantic
+reasoning required, works on any model or CC version) plus an additive semantic match against the catalog
+that can pull any relevant invocable skill regardless of which role nominally owns it. The keyword floor
+is the enforced fallback in the sense that it is embedded in the capability cards the coordinator always
+reads; the semantic additive layer is coordinator judgment. Routing-decision events record which path was
+used per task.
+
 ### Anti-Soliloquy Principle
 
 - Roles produce artifacts or clean completion signals — never status padding
@@ -496,6 +526,9 @@ The following mechanisms span three classification tiers. NORMATIVE rows are pro
 | No-teammate-Write policy (v5.4.1 §15) | ENFORCED (v5.9.0) | PreToolUse block in `authority-enforce.sh` — CLAUDE_TEAM_NAME env var detection; team-leads (CLAUDE_TEAM_ROLE=team-lead) exempt. Previously normative-only. |
 | Archive-file capping — sessions-archive.jsonl / decisions-archive.md (v5.12.1) | ENFORCED | `cap_sessions_archive()` and `cap_decisions_archive()` in `scripts/memory-maintain.py` — keep the most recent N entries (`ARCHIVE_SESSION_CAP=500`, `ARCHIVE_DECISION_CAP=200`), drop oldest; WAL-safe under advisory lock; same fail-open SessionEnd invocation chain; reported in `--check`. Bounds the cold-storage growth that capping the hot arrays moved downstream. |
 | Model-field consistency between agents/*.md and capabilities/*.json (v5.12.1) | ENFORCED | `scripts/verify-model-consistency.sh` — asserts each role's authoritative `agents/<role>.md` frontmatter `model:` equals its `capabilities/<role>.json` `"model"`; wired as pre-ship Gate 5 (exit 5 on mismatch). Catches dual-source drift without removing either field. |
+| Skill catalog freshness (v5.19.0) | ENFORCED | Gate 7 in `scripts/pre-ship-gate.sh` — committed `agents/capabilities/index.json` `skills` catalog must match a fresh run of `scripts/gen-skill-index.py`; stale or hand-edited entries block release. Mirrors Gate-6 / `manifest.sha256` honesty model. |
+| Skill catalog reachability (v5.19.0) | ENFORCED | Gate 7 in `scripts/pre-ship-gate.sh` — every `skills/*/SKILL.md` on disk must appear in the catalog, and every `invocable: true` skill must have ≥1 `owning_roles` entry; no skill can silently become unreachable. `image-craft-base` (`invocable: false`) is exempt from the owning-role requirement. |
+| Semantic skill *selection* (floor-plus-catalog, v5.19.0) | NORMATIVE | Coordinator prose instruction only — the floor (`default_skills` + keyword-matched `conditional_skills`) is the enforced-by-design fallback embedded in capability cards; the additive semantic match against the catalog is coordinator judgment, recorded in routing-decision events. Gate 7 enforces catalog correctness; selection strategy is intentionally normative. |
 | Pane-divider naming convention (v5.6.5) | NORMATIVE | Coordinator spawn-prompt discipline; no enforcement hook |
 
 **Intentional vs. candidate classification note (as of v5.12.0):** NORMATIVE rows that require genuine LLM judgment and are intentionally permanent: expertise-weighted synthesis, predictive routing, situational-leadership spawn verbosity, poisoned-memory promotion gate (D-8), strategy retirement, trust raising, and HALT wiring. These involve trade-off reasoning that cannot be safely reduced to a predicate. NORMATIVE rows that are candidates for future mechanical enforcement: mechanical routing via Agent Cards (predicate over index.json is straightforward) and advisory lock on team-knowledge (could become OS-level). (Archive-file capping and model-field consistency were candidates in earlier drafts; both became ENFORCED in v5.12.1 — see the rows above.)
