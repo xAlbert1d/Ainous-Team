@@ -1,0 +1,16 @@
+name: designer-spec
+version: 1
+producer: designer
+consumer: developer
+informed_roles: [architect, coordinator]
+path_pattern: ".claude/ainous-roles/team-sync/artifacts/designer-spec*.md"
+required_sections:
+  - Attributes defined
+  - States specified
+  - Handoff
+required_frontmatter:
+  - role
+  - session
+  - source
+  - discovered
+  - verified

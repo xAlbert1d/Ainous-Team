@@ -20,3 +20,6 @@ artifacts:
   signal-findings:
     manifest: agents/capabilities/artifacts/signal-findings.yaml
     accepted_versions: [1]
+  designer-spec:
+    manifest: agents/capabilities/artifacts/designer-spec.yaml
+    accepted_versions: [1]

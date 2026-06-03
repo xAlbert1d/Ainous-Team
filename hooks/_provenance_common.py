@@ -51,11 +51,11 @@ _PROVENANCE_PATTERNS = [
     (r'\.claude/ainous-roles/[^/]+/journal\.md$',     'md'),
     (r'\.claude/ainous-roles/user-corrections\.md$',  'md'),
     # M-3 (v5.2.0): declared named artifacts in team-sync/artifacts/ — schema-presence enforce.
-    # Covers exactly the 7 artifacts registered in agents/capabilities/artifacts/index.yaml.
+    # Covers exactly the 8 artifacts registered in agents/capabilities/artifacts/index.yaml.
     # Non-declared ad-hoc files in the same directory are intentionally not gated.
     (r'\.claude/ainous-roles/team-sync/artifacts/'
      r'(?:architect-design|researcher-findings|security-findings|code-quality-findings'
-     r'|tester-plan|tester-results|signal-findings)[^/]*\.md$', 'md'),
+     r'|tester-plan|tester-results|signal-findings|designer-spec)[^/]*\.md$', 'md'),
     # Phase 2 (v5.3.0): taint-flags surface — defense-in-depth behind TAINT_FLAG_WRITE_DENY.
     # If the primary deny-list is ever relaxed, provenance validation still applies.
     (r'\.claude/ainous-roles/team-sync/state/taint-flags/[^/]+\.jsonl$', 'jsonl'),

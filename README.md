@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.18.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.18.1.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -351,6 +351,17 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.18.1
+
+Completes the designer role's artifact integration and re-tiers it to opus. `designer-spec.md` is now a
+first-class **named artifact**: registered in `agents/capabilities/artifacts/index.yaml` with a schema
+manifest (`designer-spec.yaml`), recognized by `verify-artifact.sh`, and added to the provenance
+named-artifact gate (synced across all three copies — `_provenance_common.py`, `authority-enforce.sh`,
+`write-proxy`). The designer model is changed `sonnet → opus` (design judgment warrants the stronger tier;
+family alias, version-safe). Designer reads inputs (Read, unrestricted) and writes its spec + design assets
+within its least-privilege baseline. All 6 gates green; bats 159/159; verify-artifact accepts a well-formed
+designer-spec and rejects an incomplete one.
 
 ## What's new in v5.18.0
 

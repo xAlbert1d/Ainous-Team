@@ -4,8 +4,8 @@
 # Format: <sha256>  <path-relative-to-plugin-root>
 # tamper-EVIDENCE, not tamper-PROOFing — see gen-hook-manifest.sh header.
 2e2d9247606196e9b153b0a6e7beb500155e805cb39898682e41553bd8ebed15  hooks/_hmac_common.py
-0c606f7ebd68c4f3cdd556d2a5817ea7ab94a69fceb4eba96b5f74a14af33c1c  hooks/_provenance_common.py
-c3945c0d13559e3a1212aebd23cb0eba239c48659f4635f72f8252d79862a235  hooks/authority-enforce.sh
+7f03c43ad4c3025d5e3b1f3b6e0b67676ab197c4992e433b984c645924ae4213  hooks/_provenance_common.py
+ac04dce1ca371b908a23efb02608fc79a5a92c07932204ccc4e930be70e11dfc  hooks/authority-enforce.sh
 27296c1d30a3ce857592b027fa4d3f0eb4b9300c77f936ce5849e98937fdeaa0  hooks/session-end
 a06a1156987d53defd2ce131589524218ac2b77762493a5ab005b4914faf3331  hooks/session-start
 d86480dd5b92553311b05d47561679dcb38adc82d058abaccd0cb25322228ffc  hooks/skill-telemetry
@@ -13,5 +13,5 @@ d86480dd5b92553311b05d47561679dcb38adc82d058abaccd0cb25322228ffc  hooks/skill-te
 0d657d0371301eb10f68605fa1458d5a3cdf588df55a8b2b4ad1d6e3934e9f40  hooks/taint-flag
 d5694329ff67e1491d82e09075046e7ed3f9a2dd1b4ba517f8bbb10589716a7d  hooks/teammate-lifecycle-reaper
 b26ef34d260624b49181a5d5887ad0ce43be66a9a7d15d3c8b6abf682a67ca3b  hooks/webfetch-injection-detector
-baee6557bb982cc6ad791282943c1d12996463ba9e0bf81a3f9773a7d339cebc  hooks/write-proxy
+6e4c6b777db4fabc26b07572b9f11124995cc748cbd43331d83d5893dd198f07  hooks/write-proxy
 a9f38c9cba366256cc3f995344c167fcc6c367712afd0840e77c6dcb229c1be8  scripts/memory-maintain.py

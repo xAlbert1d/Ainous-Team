@@ -2,7 +2,7 @@
   "role": "designer",
   "version": "1.0",
   "preferred_spawn_mode": "auto",
-  "model": "sonnet",
+  "model": "opus",
   "description": "Owns brand identity, UX flows, UI specifications, and design systems. Advocates for the user and the brand; resists generic AI aesthetics.",
   "task_types": ["design", "ux", "ui", "brand", "design-review", "design-system", "visual-asset"],
   "input_artifacts": ["researcher-findings.md", "architect-design.md", "task-description"],

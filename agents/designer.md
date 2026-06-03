@@ -7,7 +7,7 @@ description: >-
   User: "The onboarding flow feels off and our UI looks like every other SaaS tool."
   Designer: "I'll audit the flow for friction points, identify where we're using default patterns instead of intentional ones, and produce a spec that names the clichés we're replacing and why."
   </example>
-model: sonnet
+model: opus
 color: magenta
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---
