@@ -444,6 +444,14 @@ if ! command -v python3 &>/dev/null; then
     exit 0
 fi
 
+# Compute plugin root from this script's own location so the embedded Python block
+# can locate scripts/self-improve-check.py without depending on CLAUDE_PLUGIN_ROOT.
+# hooks/session-start lives at <plugin_root>/hooks/session-start, so two dirname-calls
+# walk to the plugin root.  Exported as _AINOUS_PLUGIN_ROOT_COMPUTED so the Python
+# block can read it via os.environ (the heredoc is quoted so no $VAR expansion inside).
+_AINOUS_PLUGIN_ROOT_COMPUTED="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd -P 2>/dev/null || echo "")"
+export _AINOUS_PLUGIN_ROOT_COMPUTED
+
 # Build team context using python for safe JSON construction
 python3 << 'PYEOF'
 import json, os, re, sys
@@ -490,93 +498,115 @@ if playbook_content:
 if team_knowledge:
     context += "\n**Shared team knowledge:**\n" + team_knowledge + "\n"
 
-# Check consolidation health — warn if stale (>1 day), critical if >2 days
-# A role is only considered stale if it ALSO has unconsolidated project journal entries.
-# Roles with zero sessions (no project journal activity) are silently skipped.
-
-# BUG-2 FIX: match the full ## heading line so a T-suffix datetime like
-# "## 2026-04-18T10:00 — entry" is correctly rejected. A valid date heading
-# is "## YYYY-MM-DD" followed immediately by whitespace, end-of-string, or "—/-".
-_DATE_HEADING_RE = re.compile(r'^## (\d{4}-\d{2}-\d{2})(?:\s|$|—|-)')
-
-def count_unconsolidated_entries(journal_path, last_cons_str):
-    """Count journal entries (## YYYY-MM-DD lines) newer than last_cons_str.
-    C2: Non-date headings (## Compiled Truth, ## Timeline, etc.) are skipped.
-    BUG-2: datetime headings like ## 2026-04-18T10:00 are also skipped.
-    If last_cons_str is None all date-headings are counted as unconsolidated."""
-    count = 0
-    try:
-        with open(journal_path, encoding='utf-8') as f:
-            for line in f:
-                if line.startswith("## "):
-                    m = _DATE_HEADING_RE.match(line)
-                    if not m:
-                        continue
-                    entry_date = m.group(1)
-                    if last_cons_str:
-                        if entry_date > last_cons_str:
-                            count += 1
-                    else:
-                        count += 1  # No consolidation date = all are unconsolidated
-    except OSError:
-        pass
-    return count
-
-project_roles_dir = os.path.join(os.getcwd(), ".claude", "ainous-roles")
-
-stale_roles = []
+# ---------------------------------------------------------------------------
+# Check consolidation health — delegate the staleness DECISION to
+# scripts/self-improve-check.py (single source of truth).
+# Fail-open: if import or call fails for any reason, skip the reminder entirely.
+# The observable reminder text (CRITICAL / Reminder wording, role names, cron-floor
+# note) is unchanged — only the decision logic moved into the module.
+# ---------------------------------------------------------------------------
 really_critical = []
+stale_roles = []
 overflow_roles = []
 
-for playbook in glob.glob(os.path.join(roles_dir, "*/playbook.md")):
-    role = os.path.basename(os.path.dirname(playbook))
-    last_cons_str = None
-    days_stale = None
-    try:
-        with open(playbook, encoding='utf-8') as f:
-            for line in f:
-                if line.startswith("last_consolidated:"):
-                    val = line.split(":", 1)[1].strip()
-                    if val and val not in ("never", "null"):
-                        # BUG-3 FIX: extract leading YYYY-MM-DD regardless of separator
-                        # Handles: "2026-04-15", "2026-04-15T10:00", "2026-04-15 10:30:00"
-                        # BUG-3 (dead-fallback removal): if regex doesn't match, set None and warn.
-                        # The old fallback chain (split("T")[0]...) silently masked malformed values.
-                        _dt_m = re.match(r'(\d{4}-\d{2}-\d{2})', val)
-                        if _dt_m:
-                            last_cons_str = _dt_m.group(1)
+try:
+    import importlib.util as _ilu
+    # Locate self-improve-check.py: prefer the computed plugin root (injected by
+    # the bash wrapper above as _AINOUS_PLUGIN_ROOT_COMPUTED), fall back to the
+    # CLAUDE_PLUGIN_ROOT env var (set in production by the Claude Code plugin host).
+    _plugin_root_candidates = [
+        os.environ.get("_AINOUS_PLUGIN_ROOT_COMPUTED", ""),
+        os.environ.get("CLAUDE_PLUGIN_ROOT", ""),
+    ]
+    _sic_path = ""
+    for _cand in _plugin_root_candidates:
+        if _cand:
+            _candidate_path = os.path.join(_cand, "scripts", "self-improve-check.py")
+            if os.path.isfile(_candidate_path):
+                _sic_path = _candidate_path
+                break
+    if not _sic_path:
+        raise FileNotFoundError("self-improve-check.py not found in plugin root candidates")
+    _spec = _ilu.spec_from_file_location("self_improve_check", _sic_path)
+    _sic = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_sic)
+
+    _cons_result = _sic.check_consolidation(
+        root=os.getcwd(),
+        home=os.path.expanduser("~"),
+    )
+    really_critical = _cons_result.get("really_critical", [])
+    stale_roles = _cons_result.get("stale_roles", [])
+
+    # Overflow check: count unconsolidated entries independently for >20 warning.
+    # This fires regardless of the time gate (not part of triple-gate).
+    _project_roles_dir = os.path.join(os.getcwd(), ".claude", "ainous-roles")
+    _DATE_HEADING_RE = re.compile(r'^## (\d{4}-\d{2}-\d{2})(?:\s|$|—|-)')
+
+    def _count_unconsolidated_overflow(journal_path, last_cons_str):
+        count = 0
+        try:
+            with open(journal_path, encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith("## "):
+                        m = _DATE_HEADING_RE.match(line)
+                        if not m:
+                            continue
+                        entry_date = m.group(1)
+                        if last_cons_str:
+                            if entry_date > last_cons_str:
+                                count += 1
                         else:
-                            print(f"Warning: unrecognized last_consolidated format '{val}' in {playbook}", file=sys.stderr)
-                            last_cons_str = None
-                        try:
-                            cons_date = datetime.strptime(last_cons_str, "%Y-%m-%d").date()
-                            days_stale = (datetime.now().date() - cons_date).days
-                        except ValueError:
-                            last_cons_str = None
-                    break
-    except OSError:
-        pass
+                            count += 1
+        except OSError:
+            pass
+        return count
 
-    # Count unconsolidated project journal entries for this role
-    journal_path = os.path.join(project_roles_dir, role, "journal.md")
-    unconsolidated = count_unconsolidated_entries(journal_path, last_cons_str)
+    for _pb in glob.glob(os.path.join(roles_dir, "*/playbook.md")):
+        _role = os.path.basename(os.path.dirname(_pb))
+        _last_cons_str = None
+        try:
+            with open(_pb, encoding='utf-8') as _f:
+                for _line in _f:
+                    if _line.startswith("last_consolidated:"):
+                        _val = _line.split(":", 1)[1].strip()
+                        if _val and _val not in ("never", "null"):
+                            _dtm = re.match(r'(\d{4}-\d{2}-\d{2})', _val)
+                            if _dtm:
+                                _last_cons_str = _dtm.group(1)
+                        break
+        except OSError:
+            pass
+        _jpath = os.path.join(_project_roles_dir, _role, "journal.md")
+        _uc = _count_unconsolidated_overflow(_jpath, _last_cons_str)
+        if _uc > 20:
+            overflow_roles.append(_role)
 
-    # Staleness only fires when there is actual unconsolidated work sitting too long
-    if days_stale is not None and unconsolidated > 0:
-        if days_stale > 2:
-            really_critical.append(role)
-        elif days_stale > 1:
-            stale_roles.append(role)
-
-    # Overflow check fires independently of staleness threshold
-    if unconsolidated > 20:
-        overflow_roles.append(role)
+except Exception:
+    # Fail-open: import or call failed — skip the staleness reminder entirely.
+    # Identity context is still emitted below; session-start still exits 0.
+    really_critical = []
+    stale_roles = []
+    overflow_roles = []
 
 if really_critical:
-    context += "\n\n**CRITICAL:** Consolidation is >2 days stale. Run @consolidator FIRST before any other work."
+    names = ", ".join(really_critical[:5])
+    context += (
+        "\n\n**CRITICAL:** Consolidation is >2 days stale for %d role(s): %s. Run @consolidator FIRST before other work. "
+        "(A periodic self-improvement reminder will also fire mid-session via cron when the REPL is idle — "
+        "this SessionStart notice is the catch-up floor for when Claude Code was fully closed between sessions.)"
+        % (len(really_critical), names)
+    )
+    if stale_roles:
+        extra = ", ".join(stale_roles[:5])
+        context += "\n\n**Reminder:** %d additional role(s) at 1–2 days stale: %s. Consider @consolidator." % (len(stale_roles), extra)
 elif stale_roles:
     names = ", ".join(stale_roles[:5])
-    context += "\n\n**Warning:** Consolidation stale for %d role(s): %s. Run @consolidator to update playbooks." % (len(stale_roles), names)
+    context += (
+        "\n\n**Reminder:** Consolidation may be due for %d role(s): %s. Consider running @consolidator to update playbooks. "
+        "(A periodic self-improvement cron will also fire mid-session when the REPL is idle — "
+        "this is the floor reminder for sessions starting after a gap.)" % (len(stale_roles), names)
+    )
 
 if overflow_roles:
     names = ", ".join(overflow_roles[:5])

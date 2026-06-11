@@ -22,6 +22,9 @@
 #                                         + reachability: every skills/ dir cataloged; every
 #                                           invocable:true skill has ≥1 owning_role; the ONLY
 #                                           invocable:false entry is image-craft-base (Gate 7b)
+#   8. [ainous-self-improve] marker present in coordinator-instructions.md
+#                                         — regression guard for v5.20.0 periodic self-improvement
+#                                           feature (prevents silent deletion of the cron marker)
 #
 # Usage:
 #   bash scripts/pre-ship-gate.sh [--verbose]
@@ -35,6 +38,7 @@
 #   5 — model consistency drift detected
 #   6 — hook-integrity manifest stale (regenerate via gen-hook-manifest.sh)
 #   7 — skill-index stale or reachability violation (regenerate via gen-skill-index.py)
+#   8 — [ainous-self-improve] marker missing from coordinator-instructions.md
 
 set -uo pipefail
 
@@ -61,6 +65,7 @@ TRUST_EXIT=0
 MODEL_EXIT=0
 MANIFEST_EXIT=0
 SKILLIDX_EXIT=0
+SELFIMPROVE_EXIT=0
 
 printf '=%.0s' {1..70}; printf '\n'
 printf 'pre-ship-gate.sh — ainous-team release gate\n'
@@ -69,7 +74,7 @@ printf '=%.0s' {1..70}; printf '\n\n'
 # ---------------------------------------------------------------------------
 # Gate 1: Role infrastructure check (verify-role-infrastructure.sh)
 # ---------------------------------------------------------------------------
-printf '[Gate 1/7] Role infrastructure check (verify-role-infrastructure.sh)\n'
+printf '[Gate 1/8] Role infrastructure check (verify-role-infrastructure.sh)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 # shellcheck disable=SC2086
@@ -77,25 +82,25 @@ bash "$SCRIPT_DIR/verify-role-infrastructure.sh" $VERBOSE_FLAG
 INFRA_EXIT=$?
 
 if [ "$INFRA_EXIT" -eq 0 ]; then
-    printf '[Gate 1/7] PASS\n\n'
+    printf '[Gate 1/8] PASS\n\n'
 else
-    printf '[Gate 1/7] FAIL (exit %d) — role infrastructure gaps found\n\n' "$INFRA_EXIT"
+    printf '[Gate 1/8] FAIL (exit %d) — role infrastructure gaps found\n\n' "$INFRA_EXIT"
     GATE_FAILED=1
 fi
 
 # ---------------------------------------------------------------------------
 # Gate 2: Hook env-var liveness check (verify-hook-env-vars.sh)
 # ---------------------------------------------------------------------------
-printf '[Gate 2/7] Hook env-var liveness check (verify-hook-env-vars.sh)\n'
+printf '[Gate 2/8] Hook env-var liveness check (verify-hook-env-vars.sh)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 bash "$SCRIPT_DIR/verify-hook-env-vars.sh" $VERBOSE_FLAG
 ENVVAR_EXIT=$?
 
 if [ "$ENVVAR_EXIT" -eq 0 ]; then
-    printf '[Gate 2/7] PASS\n\n'
+    printf '[Gate 2/8] PASS\n\n'
 else
-    printf '[Gate 2/7] FAIL (exit %d) — fabricated env var(s) referenced in hooks\n\n' "$ENVVAR_EXIT"
+    printf '[Gate 2/8] FAIL (exit %d) — fabricated env var(s) referenced in hooks\n\n' "$ENVVAR_EXIT"
     GATE_FAILED=1
 fi
 
@@ -103,21 +108,21 @@ fi
 # Gate 3: Memory cap check (scripts/memory-maintain.py --check)
 # P0: mechanical memory cap enforcement — detect violations before shipping.
 # ---------------------------------------------------------------------------
-printf '[Gate 3/7] Memory cap check (scripts/memory-maintain.py --check)\n'
+printf '[Gate 3/8] Memory cap check (scripts/memory-maintain.py --check)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 if command -v python3 &>/dev/null && [ -f "$SCRIPT_DIR/memory-maintain.py" ]; then
     python3 "$SCRIPT_DIR/memory-maintain.py" --check ${VERBOSE_FLAG:+--verbose}
     MEMCAP_EXIT=$?
 else
-    printf '[Gate 3/7] SKIP — python3 not found or memory-maintain.py missing\n\n'
+    printf '[Gate 3/8] SKIP — python3 not found or memory-maintain.py missing\n\n'
     MEMCAP_EXIT=0
 fi
 
 if [ "$MEMCAP_EXIT" -eq 0 ]; then
-    printf '[Gate 3/7] PASS\n\n'
+    printf '[Gate 3/8] PASS\n\n'
 else
-    printf '[Gate 3/7] FAIL (exit %d) — memory cap violations detected\n\n' "$MEMCAP_EXIT"
+    printf '[Gate 3/8] FAIL (exit %d) — memory cap violations detected\n\n' "$MEMCAP_EXIT"
     GATE_FAILED=1
 fi
 
@@ -129,7 +134,7 @@ fi
 # We run it a second time here scoped to --verbose so any trust clamp warnings appear
 # in gate output; the exit code is the definitive trust-violation signal.
 # ---------------------------------------------------------------------------
-printf '[Gate 4/7] Trust audit (scripts/memory-maintain.py --check)\n'
+printf '[Gate 4/8] Trust audit (scripts/memory-maintain.py --check)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 if command -v python3 &>/dev/null && [ -f "$SCRIPT_DIR/memory-maintain.py" ]; then
@@ -138,14 +143,14 @@ if command -v python3 &>/dev/null && [ -f "$SCRIPT_DIR/memory-maintain.py" ]; th
     python3 "$SCRIPT_DIR/memory-maintain.py" --check ${VERBOSE_FLAG:+--verbose} > /dev/null 2>&1
     TRUST_EXIT=$?
 else
-    printf '[Gate 4/7] SKIP — python3 not found or memory-maintain.py missing\n\n'
+    printf '[Gate 4/8] SKIP — python3 not found or memory-maintain.py missing\n\n'
     TRUST_EXIT=0
 fi
 
 if [ "$TRUST_EXIT" -eq 0 ]; then
-    printf '[Gate 4/7] PASS\n\n'
+    printf '[Gate 4/8] PASS\n\n'
 else
-    printf '[Gate 4/7] FAIL (exit %d) — trust audit violations detected\n\n' "$TRUST_EXIT"
+    printf '[Gate 4/8] FAIL (exit %d) — trust audit violations detected\n\n' "$TRUST_EXIT"
     GATE_FAILED=1
 fi
 
@@ -154,7 +159,7 @@ fi
 # P2: single-source-of-truth guard — agents/<role>.md frontmatter model: is
 # authoritative; capabilities/<role>.json model must match.
 # ---------------------------------------------------------------------------
-printf '[Gate 5/7] Model consistency check (scripts/verify-model-consistency.sh)\n'
+printf '[Gate 5/8] Model consistency check (scripts/verify-model-consistency.sh)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 if [ -f "$SCRIPT_DIR/verify-model-consistency.sh" ]; then
@@ -162,14 +167,14 @@ if [ -f "$SCRIPT_DIR/verify-model-consistency.sh" ]; then
     bash "$SCRIPT_DIR/verify-model-consistency.sh" $VERBOSE_FLAG
     MODEL_EXIT=$?
 else
-    printf '[Gate 5/7] SKIP — verify-model-consistency.sh not found\n\n'
+    printf '[Gate 5/8] SKIP — verify-model-consistency.sh not found\n\n'
     MODEL_EXIT=0
 fi
 
 if [ "$MODEL_EXIT" -eq 0 ]; then
-    printf '[Gate 5/7] PASS\n\n'
+    printf '[Gate 5/8] PASS\n\n'
 else
-    printf '[Gate 5/7] FAIL (exit %d) — model consistency drift detected\n\n' "$MODEL_EXIT"
+    printf '[Gate 5/8] FAIL (exit %d) — model consistency drift detected\n\n' "$MODEL_EXIT"
     GATE_FAILED=1
 fi
 
@@ -181,15 +186,15 @@ fi
 # has an accurate baseline. (Comment/header lines are excluded from the diff so
 # only the actual digest data is compared.)
 # ---------------------------------------------------------------------------
-printf '[Gate 6/7] Hook-integrity manifest freshness (scripts/gen-hook-manifest.sh)\n'
+printf '[Gate 6/8] Hook-integrity manifest freshness (scripts/gen-hook-manifest.sh)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 _MANIFEST_COMMITTED="$SCRIPT_DIR/../hooks/manifest.sha256"
 if [ ! -f "$SCRIPT_DIR/gen-hook-manifest.sh" ]; then
-    printf '[Gate 6/7] SKIP — gen-hook-manifest.sh not found\n\n'
+    printf '[Gate 6/8] SKIP — gen-hook-manifest.sh not found\n\n'
     MANIFEST_EXIT=0
 elif [ ! -f "$_MANIFEST_COMMITTED" ]; then
-    printf '[Gate 6/7] FAIL — committed hooks/manifest.sha256 is missing; run gen-hook-manifest.sh\n\n'
+    printf '[Gate 6/8] FAIL — committed hooks/manifest.sha256 is missing; run gen-hook-manifest.sh\n\n'
     MANIFEST_EXIT=6
     GATE_FAILED=1
 else
@@ -218,9 +223,9 @@ else
 fi
 
 if [ "$MANIFEST_EXIT" -eq 0 ]; then
-    printf '[Gate 6/7] PASS\n\n'
+    printf '[Gate 6/8] PASS\n\n'
 else
-    printf '[Gate 6/7] FAIL (exit %d) — committed hooks/manifest.sha256 is stale; run: bash scripts/gen-hook-manifest.sh\n\n' "$MANIFEST_EXIT"
+    printf '[Gate 6/8] FAIL (exit %d) — committed hooks/manifest.sha256 is stale; run: bash scripts/gen-hook-manifest.sh\n\n' "$MANIFEST_EXIT"
     GATE_FAILED=1
 fi
 
@@ -230,16 +235,16 @@ fi
 #          skill has >=1 owning_role; the ONLY invocable:false entry is
 #          image-craft-base (any other invocable:false skill → FAIL).
 # ---------------------------------------------------------------------------
-printf '[Gate 7/7] Skill-index freshness + reachability (scripts/gen-skill-index.py)\n'
+printf '[Gate 7/8] Skill-index freshness + reachability (scripts/gen-skill-index.py)\n'
 printf '%s\n' "$(printf '%0.s-' {1..70})"
 
 _INDEX_JSON="$SCRIPT_DIR/../agents/capabilities/index.json"
 
 if [ ! -f "$SCRIPT_DIR/gen-skill-index.py" ]; then
-    printf '[Gate 7/7] SKIP — gen-skill-index.py not found\n\n'
+    printf '[Gate 7/8] SKIP — gen-skill-index.py not found\n\n'
     SKILLIDX_EXIT=0
 elif ! command -v python3 &>/dev/null; then
-    printf '[Gate 7/7] SKIP — python3 not found\n\n'
+    printf '[Gate 7/8] SKIP — python3 not found\n\n'
     SKILLIDX_EXIT=0
 else
     # Gate 7a: freshness check — exits 2 on drift
@@ -336,10 +341,27 @@ PYEOF3
 fi
 
 if [ "$SKILLIDX_EXIT" -eq 0 ]; then
-    printf '[Gate 7/7] PASS\n\n'
+    printf '[Gate 7/8] PASS\n\n'
 else
-    printf '[Gate 7/7] FAIL (exit %d) — skill-index stale or reachability violation; run: python3 scripts/gen-skill-index.py\n\n' "$SKILLIDX_EXIT"
+    printf '[Gate 7/8] FAIL (exit %d) — skill-index stale or reachability violation; run: python3 scripts/gen-skill-index.py\n\n' "$SKILLIDX_EXIT"
     GATE_FAILED=1
+fi
+
+# ---------------------------------------------------------------------------
+# Gate 8: periodic self-improvement reminder feature present
+# Regression guard for v5.20.0 — prevents silent deletion of the [ainous-self-improve]
+# cron marker from coordinator-instructions.md.
+# ---------------------------------------------------------------------------
+printf '[Gate 8/8] Periodic self-improvement marker check (coordinator-instructions.md)\n'
+printf '%s\n' "$(printf '%0.s-' {1..70})"
+
+_COORD_INSTRUCTIONS="$SCRIPT_DIR/../agents-instructions/coordinator-instructions.md"
+if ! grep -q '\[ainous-self-improve\]' "$_COORD_INSTRUCTIONS" 2>/dev/null; then
+    printf '[Gate 8/8] FAIL — [ainous-self-improve] marker missing from coordinator-instructions.md\n\n'
+    SELFIMPROVE_EXIT=8
+    GATE_FAILED=1
+else
+    printf '[Gate 8/8] PASS — periodic self-improvement reminder present\n\n'
 fi
 
 # ---------------------------------------------------------------------------
@@ -358,17 +380,21 @@ else
     printf '  Gate 5 (model-consistency):      exit %d\n' "$MODEL_EXIT"
     printf '  Gate 6 (hook-integrity-manifest): exit %d\n' "$MANIFEST_EXIT"
     printf '  Gate 7 (skill-index):            exit %d\n' "$SKILLIDX_EXIT"
+    printf '  Gate 8 (self-improve-marker):    exit %d\n' "$SELFIMPROVE_EXIT"
     # Return most specific exit code
     FAIL_COUNT=0
-    [ "$INFRA_EXIT"    -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
-    [ "$ENVVAR_EXIT"   -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
-    [ "$MEMCAP_EXIT"   -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
-    [ "$TRUST_EXIT"    -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
-    [ "$MODEL_EXIT"    -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
-    [ "$MANIFEST_EXIT" -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
-    [ "$SKILLIDX_EXIT" -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$INFRA_EXIT"       -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$ENVVAR_EXIT"      -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$MEMCAP_EXIT"      -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$TRUST_EXIT"       -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$MODEL_EXIT"       -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$MANIFEST_EXIT"    -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$SKILLIDX_EXIT"    -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
+    [ "$SELFIMPROVE_EXIT" -ne 0 ] && FAIL_COUNT=$((FAIL_COUNT + 1))
     if [ "$FAIL_COUNT" -gt 1 ]; then
         exit 3
+    elif [ "$SELFIMPROVE_EXIT" -ne 0 ]; then
+        exit 8
     elif [ "$SKILLIDX_EXIT" -ne 0 ]; then
         exit 7
     elif [ "$MANIFEST_EXIT" -ne 0 ]; then

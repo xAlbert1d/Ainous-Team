@@ -342,6 +342,280 @@ fi
 rm -f "$AUDIT_LOG" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# Staleness-warning regression tests (TC-SS-A through TC-SS-D)
+#
+# The staleness logic lives in the Python block (~L490-595 of session-start).
+# The hook reads:
+#   - role playbooks  from $HOME/.claude/ainous-roles/<role>/playbook.md
+#   - project journals from $CWD/.claude/ainous-roles/<role>/journal.md
+#
+# Spec:
+#   - unconsolidated >= 3   → role qualifies for staleness check
+#   - days_stale > 2        → really_critical (CRITICAL message, names roles)
+#   - days_stale > 1 (<=2)  → stale_roles (Reminder message, names roles)
+#   - Both non-empty        → BOTH messages appear (elif-swallow regression guard)
+#   - unconsolidated 1-2    → no staleness warning (threshold gate)
+#   - unconsolidated > 20   → overflow_roles WARNING (separate, names roles)
+#   - malformed playbook    → hook exits 0, no crash (fail-open)
+# ---------------------------------------------------------------------------
+
+# Shared isolation dirs for staleness tests — each TC gets its own subdirs
+# inside $TMPDIR_BASE so they don't interfere with reaper TCs above.
+
+STALE_TMPBASE="$TMPDIR_BASE/staleness"
+mkdir -p "$STALE_TMPBASE"
+
+# Helper: compute a date N days in the past (portable: python3)
+_days_ago() {
+    python3 -c "
+from datetime import date, timedelta
+import sys
+n = int(sys.argv[1])
+print((date.today() - timedelta(days=n)).isoformat())
+" "$1"
+}
+
+# Helper: run the hook in a fully isolated environment, capturing stdout.
+# Usage: _run_hook_capture <fake_home> <fake_project>
+# Returns 0 always (fail-open expected); stdout goes to $HOOK_OUTPUT variable.
+_run_hook_capture() {
+    local fake_home="$1"
+    local fake_project="$2"
+    HOOK_OUTPUT=$(
+        cd "$fake_project"
+        HOME="$fake_home" \
+        CLAUDE_PROJECT_DIR="$fake_project" \
+        CLAUDE_SESSION_ID="" \
+        bash "$SESSION_START" 2>/dev/null
+    ) || true
+}
+
+# Helper: write a minimal playbook.md with a given last_consolidated date.
+# Usage: _write_playbook <path> <date_string>
+_write_playbook() {
+    local path="$1"
+    local date_str="$2"
+    mkdir -p "$(dirname "$path")"
+    printf 'last_consolidated: %s\n\n# Role playbook\nStrategies go here.\n' \
+        "$date_str" > "$path"
+}
+
+# Helper: write a project journal.md with N date-headed entries, all after
+# the given last_consolidated date so they count as unconsolidated.
+# Usage: _write_journal <path> <count> <last_consolidated_date>
+_write_journal() {
+    local path="$1"
+    local count="$2"
+    local after_date="$3"
+    mkdir -p "$(dirname "$path")"
+    # Start from after_date + 1 day, write 'count' entries
+    python3 -c "
+from datetime import date, timedelta
+import sys
+
+out_path = sys.argv[1]
+count    = int(sys.argv[2])
+after    = date.fromisoformat(sys.argv[3])
+
+lines = []
+for i in range(1, count + 1):
+    d = after + timedelta(days=i)
+    lines.append(f'## {d.isoformat()} — session {i}\nSome content.\n')
+
+with open(out_path, 'w') as f:
+    f.write('\n'.join(lines))
+" "$path" "$count" "$after_date"
+}
+
+# ---------------------------------------------------------------------------
+# TC-SS-A: Role 3+ days stale AND >= 3 unconsolidated → CRITICAL message
+#          names the role.
+# ---------------------------------------------------------------------------
+TC_A_HOME="$STALE_TMPBASE/tc-a-home"
+TC_A_PROJECT="$STALE_TMPBASE/tc-a-project"
+mkdir -p "$TC_A_HOME/.claude" "$TC_A_PROJECT/.claude"
+
+DATE_3_DAYS_AGO=$(_days_ago 3)
+
+_write_playbook \
+    "$TC_A_HOME/.claude/ainous-roles/tc-a-role/playbook.md" \
+    "$DATE_3_DAYS_AGO"
+
+_write_journal \
+    "$TC_A_PROJECT/.claude/ainous-roles/tc-a-role/journal.md" \
+    3 "$DATE_3_DAYS_AGO"
+
+_run_hook_capture "$TC_A_HOME" "$TC_A_PROJECT"
+
+HAS_CRITICAL=0
+HAS_ROLE_NAME=0
+echo "$HOOK_OUTPUT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+ctx = data.get('additional_context', data.get('hookSpecificOutput', {}).get('additionalContext', ''))
+if 'CRITICAL' in ctx:
+    print('HAS_CRITICAL=1')
+if 'tc-a-role' in ctx:
+    print('HAS_ROLE_NAME=1')
+" 2>/dev/null | while IFS= read -r line; do eval "$line"; done || true
+
+# Evaluate inline since subshell env vars don't propagate — use temp file approach
+TC_A_RESULT=$(echo "$HOOK_OUTPUT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+ctx = data.get('additional_context', data.get('hookSpecificOutput', {}).get('additionalContext', ''))
+has_critical = 'CRITICAL' in ctx
+has_name     = 'tc-a-role' in ctx
+print(f'{int(has_critical)} {int(has_name)}')
+" 2>/dev/null || echo "0 0")
+
+TC_A_CRIT=$(echo "$TC_A_RESULT" | awk '{print $1}')
+TC_A_NAME=$(echo "$TC_A_RESULT" | awk '{print $2}')
+
+if [ "${TC_A_CRIT:-0}" -eq 1 ] && [ "${TC_A_NAME:-0}" -eq 1 ]; then
+    _pass "TC-SS-A: 3d-stale role with 3 unconsolidated entries → CRITICAL message names role"
+else
+    _fail "TC-SS-A: expected CRITICAL message naming 'tc-a-role'" \
+        "has_critical=${TC_A_CRIT:-0} has_role_name=${TC_A_NAME:-0} output=$(echo "$HOOK_OUTPUT" | head -c 500)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-SS-B: Role X critical (3d, 3 entries) + Role Y stale (2d, 3 entries) →
+#          output names BOTH. Regression guard for the elif-swallow bug.
+# ---------------------------------------------------------------------------
+TC_B_HOME="$STALE_TMPBASE/tc-b-home"
+TC_B_PROJECT="$STALE_TMPBASE/tc-b-project"
+mkdir -p "$TC_B_HOME/.claude" "$TC_B_PROJECT/.claude"
+
+DATE_2_DAYS_AGO=$(_days_ago 2)
+
+# Role X: 3 days stale → really_critical
+_write_playbook \
+    "$TC_B_HOME/.claude/ainous-roles/tc-b-critical-role/playbook.md" \
+    "$DATE_3_DAYS_AGO"
+_write_journal \
+    "$TC_B_PROJECT/.claude/ainous-roles/tc-b-critical-role/journal.md" \
+    3 "$DATE_3_DAYS_AGO"
+
+# Role Y: 2 days stale → stale_roles
+_write_playbook \
+    "$TC_B_HOME/.claude/ainous-roles/tc-b-stale-role/playbook.md" \
+    "$DATE_2_DAYS_AGO"
+_write_journal \
+    "$TC_B_PROJECT/.claude/ainous-roles/tc-b-stale-role/journal.md" \
+    3 "$DATE_2_DAYS_AGO"
+
+_run_hook_capture "$TC_B_HOME" "$TC_B_PROJECT"
+
+TC_B_RESULT=$(echo "$HOOK_OUTPUT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+ctx = data.get('additional_context', data.get('hookSpecificOutput', {}).get('additionalContext', ''))
+has_critical      = 'CRITICAL' in ctx
+has_reminder      = 'Reminder' in ctx
+has_critical_role = 'tc-b-critical-role' in ctx
+has_stale_role    = 'tc-b-stale-role' in ctx
+print(f'{int(has_critical)} {int(has_reminder)} {int(has_critical_role)} {int(has_stale_role)}')
+" 2>/dev/null || echo "0 0 0 0")
+
+TC_B_CRIT=$(echo "$TC_B_RESULT"  | awk '{print $1}')
+TC_B_REM=$( echo "$TC_B_RESULT"  | awk '{print $2}')
+TC_B_CR=$(  echo "$TC_B_RESULT"  | awk '{print $3}')
+TC_B_SR=$(  echo "$TC_B_RESULT"  | awk '{print $4}')
+
+if [ "${TC_B_CRIT:-0}" -eq 1 ] && [ "${TC_B_REM:-0}" -eq 1 ] \
+   && [ "${TC_B_CR:-0}" -eq 1 ] && [ "${TC_B_SR:-0}" -eq 1 ]; then
+    _pass "TC-SS-B: critical+stale roles both named — elif-swallow bug not present"
+else
+    _fail "TC-SS-B: expected CRITICAL and Reminder naming both roles" \
+        "has_critical=${TC_B_CRIT:-0} has_reminder=${TC_B_REM:-0} critical_role=${TC_B_CR:-0} stale_role=${TC_B_SR:-0}"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-SS-C: Role 3 days stale but only 2 unconsolidated entries → NO staleness
+#          warning (threshold gate: requires >= 3).
+# ---------------------------------------------------------------------------
+TC_C_HOME="$STALE_TMPBASE/tc-c-home"
+TC_C_PROJECT="$STALE_TMPBASE/tc-c-project"
+mkdir -p "$TC_C_HOME/.claude" "$TC_C_PROJECT/.claude"
+
+_write_playbook \
+    "$TC_C_HOME/.claude/ainous-roles/tc-c-role/playbook.md" \
+    "$DATE_3_DAYS_AGO"
+
+# Only 2 unconsolidated entries — below the >= 3 threshold
+_write_journal \
+    "$TC_C_PROJECT/.claude/ainous-roles/tc-c-role/journal.md" \
+    2 "$DATE_3_DAYS_AGO"
+
+_run_hook_capture "$TC_C_HOME" "$TC_C_PROJECT"
+
+TC_C_RESULT=$(echo "$HOOK_OUTPUT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+ctx = data.get('additional_context', data.get('hookSpecificOutput', {}).get('additionalContext', ''))
+has_stale_warn = ('CRITICAL' in ctx or 'Reminder' in ctx) and 'tc-c-role' in ctx
+print(int(has_stale_warn))
+" 2>/dev/null || echo "0")
+
+if [ "${TC_C_RESULT:-0}" -eq 0 ]; then
+    _pass "TC-SS-C: 3d-stale role with only 2 unconsolidated entries → no staleness warning"
+else
+    _fail "TC-SS-C: threshold gate failed — got warning despite only 2 unconsolidated entries" \
+        "output=$(echo "$HOOK_OUTPUT" | head -c 500)"
+fi
+
+# ---------------------------------------------------------------------------
+# TC-SS-D: Malformed playbook (garbage / missing date) → hook exits 0.
+#          Fail-open: session-start must never crash due to bad playbook data.
+# ---------------------------------------------------------------------------
+TC_D_HOME="$STALE_TMPBASE/tc-d-home"
+TC_D_PROJECT="$STALE_TMPBASE/tc-d-project"
+mkdir -p "$TC_D_HOME/.claude" "$TC_D_PROJECT/.claude"
+
+# Malformed playbook: no last_consolidated line at all
+MALFORMED_PB="$TC_D_HOME/.claude/ainous-roles/tc-d-role/playbook.md"
+mkdir -p "$(dirname "$MALFORMED_PB")"
+printf 'last_consolidated: *** NOT A DATE *** garbage value here\n\nSome other content.\n' \
+    > "$MALFORMED_PB"
+
+# Also write a journal so this role has entries
+_write_journal \
+    "$TC_D_PROJECT/.claude/ainous-roles/tc-d-role/journal.md" \
+    3 "2020-01-01"
+
+# Run hook and capture exit code explicitly
+TC_D_EXIT=0
+(
+    cd "$TC_D_PROJECT"
+    HOME="$TC_D_HOME" \
+    CLAUDE_PROJECT_DIR="$TC_D_PROJECT" \
+    CLAUDE_SESSION_ID="" \
+    bash "$SESSION_START" > /dev/null 2>/dev/null
+) || TC_D_EXIT=$?
+
+# Also verify the output is still valid JSON (identity context still emitted)
+TC_D_VALID_JSON=0
+(
+    cd "$TC_D_PROJECT"
+    HOME="$TC_D_HOME" \
+    CLAUDE_PROJECT_DIR="$TC_D_PROJECT" \
+    CLAUDE_SESSION_ID="" \
+    bash "$SESSION_START" 2>/dev/null
+) | python3 -c "import json,sys; json.load(sys.stdin); print('ok')" 2>/dev/null \
+    | grep -q "^ok$" && TC_D_VALID_JSON=1 || true
+
+if [ "${TC_D_EXIT:-0}" -eq 0 ] && [ "${TC_D_VALID_JSON:-0}" -eq 1 ]; then
+    _pass "TC-SS-D: malformed playbook (garbage date) → hook exits 0 and emits valid JSON (fail-open)"
+elif [ "${TC_D_EXIT:-0}" -ne 0 ]; then
+    _fail "TC-SS-D: hook must exit 0 with malformed playbook (fail-open violated)" \
+        "exit_code=${TC_D_EXIT:-?}"
+else
+    _fail "TC-SS-D: hook exited 0 but output is not valid JSON" \
+        "valid_json=${TC_D_VALID_JSON:-0}"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

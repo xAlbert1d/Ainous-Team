@@ -58,7 +58,6 @@ hooks:
                  prompt="Consolidate all roles with unconsolidated entries. This was auto-triggered by the coordinator's Stop hook because consolidation is stale (>1 day) and 3+ unconsolidated entries exist.",
                  run_in_background=true)
            ```
-           This replaces the fragile CronCreate trigger with a session-end trigger that fires when actually needed.
 
         7. Check if periodic team review is due.
            Read `.claude/ainous-roles/coordinator/reviews.md` for the most recent review date.
@@ -224,10 +223,45 @@ Every time you activate:
    - Read each `~/.claude/ainous-roles/*/growth.json` summary (avg_score, trend, total_sessions)
    - You know the 13 roles: coordinator, developer, architect, designer, code-quality, tester, researcher, writer, security, authority, consolidator, retriever, signal
 
-5. **Consolidation is auto-triggered** by the Stop hook (step 6 above) when entries are stale.
-   - No CronCreate needed — consolidation fires at session end when 3+ unconsolidated entries exist and last consolidation is >1 day old.
-   - If CronCreate is available, you can optionally set up a 2-hour cron as a backup.
+5. **Consolidation trigger set** — consolidation and retro are prompted by three mechanisms, not an automatic Stop hook:
+   - **(1) SessionStart staleness reminder** — fires on session open when stale roles are detected (the floor for sessions restarted after a gap).
+   - **(2) `[ainous-self-improve]` periodic cron (§5b)** — fires mid-session while the REPL is idle, covering long-lived sessions where SessionStart/SessionEnd never re-fire.
+   - **(3) Manual invocation** — the Stop hook in this frontmatter (step 6) fires when Claude Code closes; it checks the conditions and spawns @consolidator if due. This is opportunistic, not guaranteed (the session must actually close cleanly).
+   - No CronCreate needed **for consolidation** — consolidation is prompted by the SessionStart floor reminder + the `[ainous-self-improve]` reminder cron (§5b) + manual @consolidator.
    - Checkpoints marked with CHECKPOINT should be merged into the final entry by the consolidator during the next consolidation cycle. If no final entry follows a checkpoint, the checkpoint IS the session record.
+
+5b. **Arm periodic self-improvement reminder (best-effort, version-agnostic):**
+   This is the mid-session checkpoint for the coordinator's own rituals — it fires while the REPL is idle, covering the long-lived-session gap where SessionStart/SessionEnd hooks never fire.
+
+   Call `CronList`. If no job whose prompt contains the marker `[ainous-self-improve]` exists, call:
+   ```
+   CronCreate(
+     cron="37 4 * * *",
+     recurring=true,
+     durable=true,
+     prompt="[ainous-self-improve] Periodic self-improvement check. Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/self-improve-check.py --json and act on its verdict. If consolidation_due → spawn @consolidator (it self-skips if its own triple-gate lock is cold); if retro_due → run /team-retro; if journal_due → append one entry to .claude/ainous-roles/coordinator/journal.md. If any_due is false, do nothing. Never interrupt active user work — if mid-task, defer to the next natural pause. If the script is unavailable (older install), fall back to manual judgment: consolidation if >=24h AND >=3 unconsolidated; retro if >=7d or >=10 commits; journal if >1d since last entry."
+   )
+   ```
+   Re-arm if it's missing — this covers the 7-day expiry (durable crons expire after 7 days; a fresh session that finds no `[ainous-self-improve]` job re-creates it automatically). **Best-effort:** if `CronCreate`/`CronList` are unavailable (older Claude Code version), skip silently — the SessionStart reminder is the floor. Do not report errors or warn the user when these tools are absent.
+
+### Handling the periodic reminder
+
+When the `[ainous-self-improve]` cron prompt fires (as a queued prompt while the REPL is idle), use the canonical checker as the single source of truth for all thresholds:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/self-improve-check.py --json
+```
+
+Act on the returned JSON:
+- **`consolidation_due: true`** → spawn `@consolidator`. The consolidator self-skips if its own triple-gate (time OR sessions + volume + no concurrent lock) is cold — there is no double-work risk, but prefer not to spawn at all when the gate is clearly cold.
+- **`retro_due: true`** → run `/team-retro`.
+- **`journal_due: true`** → append one entry to `.claude/ainous-roles/coordinator/journal.md`.
+- **`any_due: false`** → do nothing. Silence is the correct response when all gates are cold.
+- **If mid-task:** defer all rituals to the next natural pause — never interrupt active user work.
+
+The script is the single source of truth for what "due" means for each check. The thresholds are defined once in `scripts/self-improve-check.py` and shared between this cron and the SessionStart staleness reminder — they cannot drift independently.
+
+This is what makes the "on stop" rituals (consolidation, retro, coordinator self-assessment) actually run in a never-restarted session where SessionEnd never fires. The SessionStart reminder remains the floor for the case when Claude Code is fully closed between sessions.
 
 # Project Bootstrap
 

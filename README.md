@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.19.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.20.0.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -355,6 +355,37 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.20.0
+
+Adds a **periodic self-improvement reminder** — a coordinator-armed durable cron that fires while
+the REPL is idle, closing the long-lived-session gap where consolidation, team retrospectives, and
+the coordinator's own journal/self-assessment never ran because SessionStart/SessionEnd hooks only
+fire at session boundaries.
+
+**Problem fixed.** In a never-restarted single session, the coordinator's Stop hook never fires and
+the SessionStart consolidation warning is never seen again. Self-improvement (consolidation, retro,
+coordinator self-assessment) silently stops happening. The coordinator is the always-on main agent
+with no task-completion boundary — it has no natural trigger for its own rituals mid-session.
+
+**Solution.** At each session start the coordinator calls `CronList`; if no job with the
+`[ainous-self-improve]` marker exists, it calls `CronCreate` (durable, recurring, 04:37 daily).
+The cron prompt fires while the REPL is idle and prompts the coordinator to evaluate the three
+self-improvement gates (consolidation, retro, coordinator journal) and act only if genuinely due.
+Durable crons expire after 7 days — re-arming happens automatically on the next session start that
+finds the job missing.
+
+**Reminder-only; agent decides.** The cron is a reminder prompt, not a forced action. The
+coordinator evaluates each gate with judgment and does nothing if nothing is due.
+
+**Version-agnostic degradation.** If `CronCreate`/`CronList` are unavailable (older Claude Code),
+the coordinator skips silently. The SessionStart staleness reminder remains the floor — it always
+fires on session open after a gap, regardless of cron availability.
+
+**Honest limitation.** This is not a background daemon. Crons fire only while Claude Code is open
+and idle. When Claude Code is fully closed, nothing fires — SessionStart catch-up handles that on
+the next open. See `docs/SELF-IMPROVEMENT-SCHEDULING.md` for the full design and AutoDream overlap
+note.
 
 ## What's new in v5.19.0
 

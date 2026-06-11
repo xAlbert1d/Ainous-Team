@@ -9,7 +9,7 @@
     {
       "name": "ainous-team",
       "description": "Persistent agent team with evolving playbooks, trust progression, and authority governance",
-      "version": "5.19.0",
+      "version": "5.20.0",
       "source": "./"
     }
   ]
