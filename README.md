@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.20.0.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.20.1.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -16,10 +16,24 @@ Each role accumulates knowledge across sessions: strategies that work get reinfo
 ## Install
 
 ```bash
-# Add the marketplace (adjust path to where you cloned the repo):
-claude plugin marketplace add /path/to/ainous-team
+# Add the marketplace from GitHub:
+claude plugin marketplace add xAlbert1d/Ainous-Team
 
 # Install the plugin:
+claude plugin install ainous-team
+```
+
+### Updating
+
+```bash
+# Refresh the marketplace to fetch the latest release:
+claude plugin marketplace update xAlbert1d/Ainous-Team
+```
+
+Claude Code picks up the new version on the next session start. If the version doesn't roll over, reinstall:
+
+```bash
+claude plugin uninstall ainous-team
 claude plugin install ainous-team
 ```
 
@@ -355,6 +369,14 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.20.1
+
+Corrects the install instructions. The marketplace is now added from GitHub
+(`claude plugin marketplace add xAlbert1d/Ainous-Team`) instead of a local clone path — the
+old `/path/to/ainous-team` instruction produced a "Marketplace file not found" error for anyone
+who hadn't cloned the repo to that exact location. Adds an **Updating** section
+(`claude plugin marketplace update xAlbert1d/Ainous-Team`). Docs-only; no code or behavior change.
 
 ## What's new in v5.20.0
 
