@@ -233,6 +233,8 @@ Every time you activate:
 5b. **Arm periodic self-improvement reminder (best-effort, version-agnostic):**
    This is the mid-session checkpoint for the coordinator's own rituals — it fires while the REPL is idle, covering the long-lived-session gap where SessionStart/SessionEnd hooks never fire.
 
+   Before arming, if `.claude/.gitignore` does not already list `scheduled_tasks.json`, append it (the durable cron persists there and must never be committed).
+
    Call `CronList`. If no job whose prompt contains the marker `[ainous-self-improve]` exists, call:
    ```
    CronCreate(

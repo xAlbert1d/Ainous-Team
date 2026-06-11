@@ -612,6 +612,15 @@ if overflow_roles:
     names = ", ".join(overflow_roles[:5])
     context += "\n\n**WARNING:** %d role(s) have >20 unconsolidated entries: %s. Consolidation urgently needed." % (len(overflow_roles), names)
 
+# Always-present cron-arming nudge (v5.20.2): unconditional, not gated on staleness.
+# The coordinator checks CronList and arms [ainous-self-improve] if missing — this is
+# the explicit direction that makes arming reliable across all session-start paths.
+context += (
+    "\n\n**Self-improve cron:** Check `CronList` — if no `[ainous-self-improve]` cron is armed, "
+    "arm it now per coordinator-instructions §5b (CronList → CronCreate if missing). "
+    "This is the periodic self-improvement reminder; skip silently if CronCreate is unavailable."
+)
+
 # C1 (v5.4.0): Warn if zero spawn events logged in last 7 days for ainous-team projects.
 # Fail-warn (non-blocking): parse errors are silently skipped.
 _ainous_roles_present = os.path.isdir(os.path.join(os.getcwd(), ".claude", "ainous-roles"))

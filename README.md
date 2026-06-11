@@ -1,6 +1,6 @@
 # Ainous Team
 
-A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.20.1.
+A persistent agent team plugin for [Claude Code](https://claude.ai/code) -- 13 roles, 63 skills, that learn and improve over time. v5.20.2.
 
 Built by [xdimension.ai](https://xdimension.ai)
 
@@ -369,6 +369,35 @@ ainous-team/                             <-- the plugin
 |-- researcher/memory.md                 <-- entities + patterns for THIS codebase
 \-- ... (per-role journals + memory)
 ```
+
+## What's new in v5.20.2
+
+Three reliability and hygiene improvements:
+
+**Reliable cron arming via `/team-init`.** The `[ainous-self-improve]` periodic cron was previously
+armed only by the coordinator at session start — an LLM-prose-dependent step that could be missed.
+Now `/team-init` explicitly arms the cron (step 5) as part of the guaranteed init path, giving the
+feature a second, more reliable entry point.
+
+**Stronger SessionStart nudge.** `hooks/session-start` now injects an always-present (not
+staleness-gated) line directing the coordinator to check `CronList` and arm the cron if missing.
+This complements the existing staleness reminder so the arming instruction appears every session
+open, not only when roles are stale.
+
+**`scheduled_tasks.json` gitignore footgun fix.** Claude Code writes `scheduled_tasks.json` into
+`<project>/.claude/` when a durable cron is registered. Without protection this file — which
+contains per-session pid/runtime metadata — can be accidentally committed to a shared repository.
+The fix uses a **scoped `.claude/.gitignore`** (never touches the repo root `.gitignore`):
+`scripts/setup.sh` creates or appends `scheduled_tasks.json` to `.claude/.gitignore` during
+scaffolding; the coordinator's §5b arming step also ensures the entry is present before arming.
+Idempotent — running setup twice does not duplicate the entry.
+
+**Multi-repo scope and OpenClaw comparison documented.** `docs/SELF-IMPROVEMENT-SCHEDULING.md`
+now covers: cron trigger is project-local (each repo arms its own, no cross-firing); consolidator
+effect is global (writes `~/.claude/ainous-roles/*/playbook.md`); concurrent consolidation is
+serialized by `fcntl.flock`; the known dedup edge with multi-repo global timestamps; the
+`.claude/.gitignore` guidance; and a brief comparison to OpenClaw's always-on daemon approach
+(ainous-team is CC-scoped by design).
 
 ## What's new in v5.20.1
 

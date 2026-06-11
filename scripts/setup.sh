@@ -137,6 +137,28 @@ BASEEOF
 }
 generate_baselines
 
+# Ensure .claude/.gitignore exists and ignores scheduled_tasks.json.
+# Durable crons write to <project>/.claude/scheduled_tasks.json — it contains
+# per-session pid/runtime metadata that must never be committed to a shared repo.
+# We use a SCOPED .claude/.gitignore (git honours gitignore files in subdirs) so
+# we never need to touch the repo's root .gitignore.
+_claude_dir="${PROJECT_ROOT}/.claude"
+_scoped_gitignore="${_claude_dir}/.gitignore"
+_gitignore_entry="scheduled_tasks.json"
+
+if [ -d "$_claude_dir" ]; then
+    if [ ! -f "$_scoped_gitignore" ]; then
+        printf '%s\n' "$_gitignore_entry" > "$_scoped_gitignore"
+        echo "  Created .claude/.gitignore (ignores scheduled_tasks.json)"
+    elif ! grep -qF "$_gitignore_entry" "$_scoped_gitignore" 2>/dev/null; then
+        printf '\n%s\n' "$_gitignore_entry" >> "$_scoped_gitignore"
+        echo "  Appended scheduled_tasks.json to existing .claude/.gitignore"
+    else
+        echo "  .claude/.gitignore already lists scheduled_tasks.json — skipping"
+    fi
+fi
+
+
 # Initialize git repo for universal knowledge tracking
 if [ ! -d "$ROLES_DIR/.git" ]; then
     cd "$ROLES_DIR" && git init -q && git add */playbook.md */growth.json authority/authority-book.md authority/decisions.md authority/incident-response.md team-knowledge.md && git commit -q -m "Initial Ainous Team setup"

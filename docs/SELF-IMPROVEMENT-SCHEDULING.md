@@ -129,6 +129,69 @@ primary mechanisms; the cron adds robustness for the long-session case.
 
 ---
 
+## Multi-repo & scope
+
+**Trigger scope — project-local.** The `[ainous-self-improve]` durable cron is registered in
+`<project>/.claude/scheduled_tasks.json`. Claude Code fires cron prompts only within the session
+that created them; each repository arms its own cron in its own `scheduled_tasks.json`. There is no
+cross-project firing — repo A's cron will not fire in a session open against repo B.
+
+**Effect scope — global.** When the cron fires and the coordinator spawns `@consolidator`, the
+consolidator reads role playbooks and journals from `~/.claude/ainous-roles/*/` (universal) and the
+current project's `.claude/ainous-roles/*/` (project-local), then writes back to
+`~/.claude/ainous-roles/*/playbook.md`. The write effect is global across all projects.
+
+**Concurrent consolidation is safe.** `scripts/memory-maintain.py` (line 101) acquires an
+`fcntl.flock` advisory lock before writing any playbook. If two consolidation runs are triggered
+simultaneously (e.g., two repos both fire their cron within the same idle window), the second run
+blocks until the first finishes. The lock prevents corruption; neither run is lost — the second
+simply starts after the first has committed.
+
+**Natural deduplication via global timestamp.** Each role's `playbook.md` frontmatter carries a
+`last_consolidated` timestamp. The consolidator's triple gate requires `time >= 24h` (or
+`sessions >= 5`) before running. If repo A fires first and updates `last_consolidated`, repo B's
+consolidation run (arriving within 24h) will see a fresh timestamp and skip — no double work.
+
+**Known subtle edge.** Because `last_consolidated` is global but journals are per-project, a
+consolidation run from repo A can advance the global timestamp past repo B's unconsolidated
+journal entries. If repo B has entries written before the consolidation, they will no longer
+satisfy the `entry_date > last_consolidated` condition and may be silently skipped on repo B's
+next consolidation cycle. This is not a new bug — it predates the cron, existing any time two
+repos share global role state. The periodic cron makes this edge reachable more often. Mitigation:
+run `/team-retro` or spawn `@consolidator` explicitly in each active repo before long idle periods.
+
+**`scheduled_tasks.json` and gitignore.** Claude Code writes `scheduled_tasks.json` into
+`<project>/.claude/` when a durable cron is registered. This file contains per-session pid and
+runtime metadata — it must **not** be committed to a shared repository. The plugin ensures this via
+a scoped `.claude/.gitignore` (not the repo root `.gitignore`):
+
+- `scripts/setup.sh` creates or updates `.claude/.gitignore` to include `scheduled_tasks.json`
+  during initial scaffolding.
+- The coordinator's §5b arming step also checks and appends the entry if absent, protecting
+  projects that did not run setup.
+- `.claude/.gitignore` is honoured by git for paths under `.claude/` only and does not affect
+  the rest of the repository.
+
+---
+
+## Compared to OpenClaw
+
+OpenClaw (JiuwenClaw community release, 2026-03) achieves never-stop agent operation via a
+**persistent background daemon** running on the user's own API keys — it stays alive regardless of
+whether any UI is open, re-spawning after crashes, firing on wall-clock schedules.
+
+The ainous-team's periodic self-improvement cron is **CC-scoped**: it fires only while Claude Code
+is open and the REPL is idle. When Claude Code is fully closed, nothing fires. This is an
+intentional design boundary — ainous-team does not bundle a background daemon, OS-level scheduler
+(`launchd`, `cron`, `systemd`), or headless process.
+
+If true never-stop self-improvement is wanted — cron firing even when CC is closed — the path is
+an OS timer running `claude --print '<[ainous-self-improve] prompt>'` (subscription-backed,
+headless). That is a user-level integration choice and is intentionally not bundled in this plugin.
+The ainous-team's arming mechanism (`CronCreate`) is LLM-tool-only and cannot call OS schedulers.
+
+---
+
 ## AutoDream overlap note
 
 Anthropic's AutoDream (Claude Code v2.1.145+) provides platform-level memory consolidation triggered

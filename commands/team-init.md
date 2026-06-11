@@ -29,3 +29,8 @@ If not initialized:
    - `/team-history` — session history
    - `/team-alerts` — health checks
    - `/team-retro` — periodic team review
+
+5. Arm the periodic self-improvement cron (same logic as coordinator-instructions §5b — reference that section rather than duplicating the full prompt text to avoid drift):
+   - Call `CronList`; if no job whose prompt contains `[ainous-self-improve]` exists, call `CronCreate` as specified in coordinator-instructions §5b.
+   - Before arming, ensure `.claude/.gitignore` lists `scheduled_tasks.json` (append if absent).
+   - This is best-effort: if `CronCreate`/`CronList` are unavailable (older Claude Code), skip silently — the SessionStart reminder is the floor.
