@@ -644,6 +644,8 @@ Read `.claude/ainous-roles/coordinator/retros.md` (if exists). For each retro en
    - Compute failure mode frequency: which failure modes are most common?
    - High retry rates for a role → that role may need a strategy adjustment
    - High frequency of `missing-artifact` → roles are not following the runtime charter
+   - **Completion-coverage ratio** = count(completed|failed events) ÷ count(spawn events) since `last_consolidated`. If ratio < 0.8, the coordinator is not emitting outcome events per Step 4d; flag as the highest-priority §5d process-discipline regression. All other failure analytics (retry rates, failure mode frequency, handoff pattern learning) depend on outcome events being present — missing events silently corrupt the entire learning loop. Report this before any other §5d finding.
+   - **Silently-closed delegation detection**: join `subagent-outcome.child_session_id` to `completed`/`failed` event `session_id` fields. A `subagent-outcome` with `tool_status:"returned"` but no matching semantic outcome event for the same `child_session_id` = a silently-closed delegation where the role ran to completion but the coordinator never recorded the outcome. Count these as an "unreported" failure mode and include in the failure mode frequency table.
 7. Feed all findings into the coordinator's playbook evolution (step 5a) as high-signal evidence
 8. **Handoff pattern learning**: For each role pair that handed off work in the retro period:
    - Was the handoff smooth? (role-B completed quickly and met contract on first attempt)

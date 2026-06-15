@@ -354,6 +354,56 @@ try:
 except OSError as exc:
     _log(f"failed to write spawn event to {hist_path}: {exc}")
 
+# v5.21.0: mechanical liveness floor event — subagent-outcome.
+# Emitted on every Agent PostToolUse, regardless of parent-taint state, to give
+# the consolidator a tool-level signal for every delegation that ran.
+# FAIL-OPEN: if tool_result is absent, emit with tool_status="unknown" (never drop).
+# This is source="hook-auto" (mechanically observed); NOT a contract-judgment event.
+_tool_result = payload.get("tool_result") or {}
+_is_error = False
+if isinstance(_tool_result, dict):
+    # Strict identity check: only the actual boolean True (not truthy strings like "false")
+    _is_error = (_tool_result.get("is_error") is True)
+
+if not isinstance(_tool_result, dict) or not _tool_result:
+    _outcome_tool_status = "unknown"
+elif _is_error:
+    _outcome_tool_status = "error"
+else:
+    _outcome_tool_status = "returned"
+
+_child_session_id = None
+if isinstance(_tool_result, dict):
+    # Coerce to string so the consolidator's string join never silently fails on int IDs.
+    _child_session_id = str(_tool_result.get("session_id") or "") or None
+    # Self-join guard: a child should never carry the parent's own session_id.
+    # Letting it through would make the consolidator's child_session_id<->completed.session_id
+    # join match the parent's own events and false-report silently-closed delegations.
+    if _child_session_id is not None and _child_session_id == session_id:
+        _child_session_id = None
+
+outcome_event = {
+    "ts":               timestamp,
+    "schema":           "1",
+    "event":            "subagent-outcome",
+    "source":           "hook-auto",
+    "role":             role,
+    "session_id":       session_id,
+    "child_session_id": _child_session_id,
+    "teammate_name":    teammate_name,
+    "team_name":        team_name,
+    "spawn_mode":       spawn_mode,
+    "is_error":         _is_error,
+    "tool_status":      _outcome_tool_status,
+}
+
+try:
+    with open(hist_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(outcome_event) + "\n")
+    _log(f"emitted subagent-outcome event: role={role} tool_status={_outcome_tool_status} child_session_id={_child_session_id}")
+except OSError as exc:
+    _log(f"failed to write subagent-outcome event to {hist_path}: {exc}")
+
 sys.exit(0)
 PYEOF
 

@@ -113,12 +113,12 @@ Enforcement below refers exclusively to behavior implemented in `hooks/authority
 
 ### Session Log & Crash Recovery
 - `.claude/ainous-roles/team-sync/state/task-history.jsonl` — append-only session event log
-- Records: spawn, completed, failed, retried, gate-passed, gate-failed, skill-invoked events
+- Records: spawn, completed, failed, retried, gate-passed, gate-failed, skill-invoked, subagent-outcome events
 - `skill-invoked` event `source` values: `coordinator-spawn` (assigned by coordinator), `role-self-report` (self-reported by role instruction), `hook-auto` (mechanically observed by `hooks/skill-telemetry` PostToolUse hook — v4.14.0)
 - `skill-invoked` event schema (v4.14.0): includes `session_id` field (CLAUDE_SESSION_ID) for precise session-scoped aggregation; existing readers tolerate this additive field
 - `spawn` event schema (v4.15.0): includes `mode` field (`"agent"` | `"tmux"`) indicating which spawn mechanism was used; additive — existing readers without knowledge of this field continue to work
 - Events now carry `schema: "N"` field (v4.20.0): new events written via `scripts/log-event.sh` include `"schema": "1"`; old lines without `schema` are treated as `schema: 0` and remain readable — no backfill required; see CLAUDE-DESIGN.md §session-log
-- New event types: `teammate-nonce` (v5.5.1 — emitted when hook resolves teammate identity); `hook-write` (v5.5.0 — emitted per successful write-proxy hook execution, carries `destination`, `bytes_written`, `envelope_hmac`)
+- New event types: `teammate-nonce` (v5.5.1 — emitted when hook resolves teammate identity); `hook-write` (v5.5.0 — emitted per successful write-proxy hook execution, carries `destination`, `bytes_written`, `envelope_hmac`); `subagent-outcome` (v5.21.0 — emitted mechanically by `hooks/spawn-telemetry` on every Agent PostToolUse; carries `tool_status` ["returned"|"error"|"unknown"] and `child_session_id` for consolidator reconciliation against `completed`/`failed` events; source is always `hook-auto`)
 - `spawn` event extended (v5.5.0+): includes `write_proxy_nonce_sha256` field (hash only; raw nonce lives in `~/.claude/teams/<team>/nonces/<mate>.nonce` mode 0600 after v5.7.0) for teammate envelope construction
 
 > Read path (coordinator resuming from log) and design rationale: see CLAUDE-DESIGN.md §session-log

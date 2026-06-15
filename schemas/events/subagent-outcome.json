@@ -1,0 +1,10 @@
+{
+  "event_type": "subagent-outcome",
+  "required": ["ts", "schema", "event", "role", "tool_status"],
+  "optional": ["source", "session_id", "child_session_id", "teammate_name", "team_name", "spawn_mode", "is_error"],
+  "enums": {
+    "event": ["subagent-outcome"],
+    "tool_status": ["returned", "error", "unknown"],
+    "spawn_mode": ["agent", "team_name"]
+  }
+}

@@ -789,6 +789,28 @@ When a role reports BLOCKED status, triage in order:
 3. **Scope problem** — task is too large for one role → break into smaller pieces, re-dispatch
 4. **Plan problem** — the design/plan itself is wrong → escalate to @architect or user
 
+### Step 4d: Mandatory Outcome Emission
+
+**This is a mandatory gated step, not advisory prose.** Before closing any delegation — whether advancing to the next phase, returning results to the user, or marking a phase complete — the coordinator MUST emit a `completed` or `failed` event via `scripts/log-event.sh` for the role that just finished.
+
+**Exit criterion:** A phase is NOT complete until BOTH conditions hold:
+1. All required artifacts are verified (per Step 5 mechanical verification)
+2. An outcome event (`completed` or `failed`) has been emitted for the delegated role
+
+Emitting the outcome event IS part of the verification gate's exit criterion, not a post-step. A phase that passes artifact verification but has no outcome event in task-history.jsonl is treated as incomplete.
+
+**Mandatory pre-condition** (mirrors runtime-charter.md §8 skill-invoked pattern): the coordinator MUST NOT advance phase or return to user without this event being written. If the role did not emit its own `completed`/`failed` event, the coordinator emits on the role's behalf.
+
+Emit outcome:
+```bash
+# On success:
+scripts/log-event.sh completed role=<role> phase=<phase> contract_status=met
+# On failure (after exhausting retries):
+scripts/log-event.sh failed role=<role> phase=<phase> failure_mode=<mode>
+```
+
+**Consolidator enforcement:** The consolidator measures completion-coverage ratio = count(completed|failed) ÷ count(spawn) since last consolidation. A ratio < 0.8 flags the coordinator as failing this mandatory step. This gate exists because all failure analytics downstream depend on outcome events being present; missing events silently corrupt the learning loop.
+
 ### Skill Assignment
 
 **Skill assignments are defined in `agents/capabilities/<role>.json`** under `default_skills` (always assigned) and `conditional_skills` (assigned when task matches the `when` condition). Read the role's card before spawning and include the matching skills in the execution contract.

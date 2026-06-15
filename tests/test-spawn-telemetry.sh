@@ -78,7 +78,22 @@ else
     if [ ! -f "$TASK_HISTORY" ]; then
         _fail "TC-ST-1: task-history.jsonl not created" "File missing"
     else
-        LAST_LINE=$(tail -1 "$TASK_HISTORY")
+        # Select the spawn event explicitly (spawn-telemetry now also appends a subagent-outcome line)
+        SPAWN_LINE=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                d = json.loads(line)
+                if d.get('event') == 'spawn':
+                    print(line)
+                    break
+            except Exception:
+                pass
+" "$TASK_HISTORY" 2>/dev/null || echo "")
+        LAST_LINE="$SPAWN_LINE"
         ROLE=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('role',''))" "$LAST_LINE" 2>/dev/null || echo "")
         SOURCE=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('source',''))" "$LAST_LINE" 2>/dev/null || echo "")
         SCHEMA=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('schema',''))" "$LAST_LINE" 2>/dev/null || echo "")
@@ -98,7 +113,22 @@ fi
 # ---------------------------------------------------------------------------
 rm -f "$TASK_HISTORY"
 _run_hook '{"subagent_type":"ainous-team:developer","name":"alice","team_name":"foo","run_in_background":true,"prompt":"work"}'
-LAST_LINE=$(tail -1 "$TASK_HISTORY" 2>/dev/null || echo "{}")
+# Select the spawn event explicitly (spawn-telemetry now also appends a subagent-outcome line)
+ST2_SPAWN_LINE=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                d = json.loads(line)
+                if d.get('event') == 'spawn':
+                    print(line)
+                    break
+            except Exception:
+                pass
+" "$TASK_HISTORY" 2>/dev/null || echo "{}")
+LAST_LINE="$ST2_SPAWN_LINE"
 SPAWN_MODE=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('spawn_mode',''))" "$LAST_LINE" 2>/dev/null || echo "")
 TN=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('teammate_name',''))" "$LAST_LINE" 2>/dev/null || echo "")
 TEAM=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('team_name',''))" "$LAST_LINE" 2>/dev/null || echo "")

@@ -56,10 +56,10 @@ This interactive command walks you through choosing your operating mode and then
 
 ```bash
 # Coordinator-as-default mode (recommended)
-bash "$(claude plugin path ainous-team)/scripts/setup.sh"
+bash "$HOME/.claude/plugins/marketplaces/ainous-team/scripts/setup.sh"
 
 # Agent mode
-bash "$(claude plugin path ainous-team)/scripts/setup.sh" --agentmode
+bash "$HOME/.claude/plugins/marketplaces/ainous-team/scripts/setup.sh" --agentmode
 ```
 
 Post-commit journal reminder for coordinators: run `bash scripts/install-post-commit-journal-reminder.sh` once per repo to enable automatic commit-time prompts.
