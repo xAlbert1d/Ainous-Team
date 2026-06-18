@@ -58,6 +58,33 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _resolve_root(start: str) -> str:
+    """Walk up from `start` and return the nearest ancestor directory that
+    contains a `.claude/ainous-roles/` subdirectory (a dir, not just `.claude/`).
+
+    Falls back to `start` unchanged when no such ancestor exists, preserving
+    current behaviour when the script is run outside any ainous-team project.
+
+    Guards against infinite loops at the filesystem root.
+
+    Rationale: cwd drifts during a session (e.g. after `cd .../src` for a git
+    commit). Using bare os.getcwd() causes the checker to evaluate the wrong
+    directory tree and misfire. Walking upward and anchoring to the presence of
+    `.claude/ainous-roles/` makes the bare-invocation robust against cwd drift.
+    """
+    current = os.path.abspath(start)
+    while True:
+        candidate = os.path.join(current, ".claude", "ainous-roles")
+        if os.path.isdir(candidate):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            # Reached the filesystem root without finding a match
+            break
+        current = parent
+    return start
+
+
 def _parse_date(s) -> "datetime | None":
     """Parse a YYYY-MM-DD (or YYYY-MM-DD...) string to a date.
     Returns None on any failure — never raises."""
@@ -539,7 +566,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
-    root = args.root if args.root else os.getcwd()
+    root = args.root if args.root else _resolve_root(os.getcwd())
     home = args.home if args.home else os.path.expanduser("~")
 
     try:

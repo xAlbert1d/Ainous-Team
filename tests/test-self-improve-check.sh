@@ -299,6 +299,77 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# T14: CWD-DRIFT REGRESSION — cwd inside a subdir of project, no --root
+#      Proves the _resolve_root walk-up fix: verdict from subdir == verdict from root.
+# ---------------------------------------------------------------------------
+R="$TMPDIR_BASE/t14/root"; H="$TMPDIR_BASE/t14/home"
+mkdir -p "$R/.claude/ainous-roles/coordinator" "$H"
+# Build a project with consolidation NOT due (all cold) so we can confirm the
+# subdir verdict matches the root verdict exactly (not just "both due" which any
+# directory without journals would give).
+_playbook "$H" developer "$(_days_ago 0)"
+_journal_entries "$R" developer "$(_days_ago 0)" "$(_days_ago 0)"
+printf '## %s retro\n' "$(_days_ago 0)" > "$R/.claude/ainous-roles/coordinator/reviews.md"
+printf '## %s note\n' "$(_days_ago 0)" > "$R/.claude/ainous-roles/coordinator/journal.md"
+# Capture the reference result using explicit --root (always correct)
+REF=$(_run "$R" "$H")
+# Now create a nested subdir and run WITHOUT --root, using --home for home (home is stable)
+SUBDIR="$R/nested/subdir"
+mkdir -p "$SUBDIR"
+# Run the checker from the subdir with no --root; home still passed explicitly
+SUBOUT=$(cd "$SUBDIR" && python3 "$CHECKER" --home "$H" --json 2>/dev/null)
+REF_CD=$(_jget "$REF" 'd["consolidation_due"]')
+REF_RD=$(_jget "$REF" 'd["retro_due"]')
+REF_JD=$(_jget "$REF" 'd["journal_due"]')
+SUB_CD=$(_jget "$SUBOUT" 'd["consolidation_due"]')
+SUB_RD=$(_jget "$SUBOUT" 'd["retro_due"]')
+SUB_JD=$(_jget "$SUBOUT" 'd["journal_due"]')
+if [ "$REF_CD" = "$SUB_CD" ] && [ "$REF_RD" = "$SUB_RD" ] && [ "$REF_JD" = "$SUB_JD" ]; then
+    _pass "T14: cwd-drift regression — subdir verdict matches --root verdict (cons=$SUB_CD retro=$SUB_RD journal=$SUB_JD)"
+else
+    _fail "T14: cwd-drift mismatch: ref cons=$REF_CD retro=$REF_RD journal=$REF_JD vs sub cons=$SUB_CD retro=$SUB_RD journal=$SUB_JD" \
+          "ref=$REF :: sub=$SUBOUT"
+fi
+
+# ---------------------------------------------------------------------------
+# T15: OUTSIDE-PROJECT FALLBACK — cwd has no .claude/ainous-roles ancestor
+#      Proves the fallback path: no ancestor match -> uses cwd (fail-open, no crash).
+# ---------------------------------------------------------------------------
+OUTSIDE_DIR="$TMPDIR_BASE/t15/outside"
+mkdir -p "$OUTSIDE_DIR"
+H15="$TMPDIR_BASE/t15/home"
+mkdir -p "$H15"
+OUTSIDE_OUT=$(cd "$OUTSIDE_DIR" && python3 "$CHECKER" --home "$H15" --json 2>/dev/null)
+OUTSIDE_CODE=$?
+OUTSIDE_ERR=$(cd "$OUTSIDE_DIR" && python3 "$CHECKER" --home "$H15" --json 2>&1 >/dev/null)
+if [ "$OUTSIDE_CODE" = "0" ] && [ -z "$OUTSIDE_ERR" ] \
+   && [ "$(_jget "$OUTSIDE_OUT" 'd["any_due"]')" = "False" ]; then
+    _pass "T15: outside-project fallback -> exit 0, any_due=false, no stderr (cwd used as root)"
+else
+    _fail "T15: expected clean fail-open when outside any project" \
+          "code=$OUTSIDE_CODE err=$OUTSIDE_ERR out=$OUTSIDE_OUT"
+fi
+
+# ---------------------------------------------------------------------------
+# T16: EXPLICIT --root OVERRIDES cwd resolution
+#      Proves that passing --root bypasses _resolve_root entirely.
+# ---------------------------------------------------------------------------
+R="$TMPDIR_BASE/t16/root"; H="$TMPDIR_BASE/t16/home"
+mkdir -p "$R/.claude/ainous-roles/coordinator" "$H"
+_playbook "$H" developer "$(_days_ago 3)"
+_journal_entries "$R" developer "$(_days_ago 2)" "$(_days_ago 1)" "$(_days_ago 0)"
+printf '## %s note\n' "$(_days_ago 0)" > "$R/.claude/ainous-roles/coordinator/journal.md"
+# cwd is a random tmpdir outside the project tree — but --root overrides
+UNRELATED_DIR="$TMPDIR_BASE/t16/unrelated"
+mkdir -p "$UNRELATED_DIR"
+EXPLICIT_OUT=$(cd "$UNRELATED_DIR" && python3 "$CHECKER" --root "$R" --home "$H" --json 2>/dev/null)
+if [ "$(_jget "$EXPLICIT_OUT" 'd["consolidation_due"]')" = "True" ]; then
+    _pass "T16: explicit --root from unrelated cwd -> sees correct project tree (consolidation due)"
+else
+    _fail "T16: explicit --root did not override cwd; expected consolidation_due=True" "$EXPLICIT_OUT"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
